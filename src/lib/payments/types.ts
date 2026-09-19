@@ -8,6 +8,6 @@ export interface PaymentInitResult {
 
 export interface PaymentProvider {
   id: "mock" | "paystack";
-  initialize(params: { email: string; amountKobo: number; reference: string }): Promise<PaymentInitResult>;
+  initialize(params: { email: string; amountKobo: number; reference: string; callbackUrl?: string }): Promise<PaymentInitResult>;
   verify(reference: string): Promise<{ success: boolean; reference: string }>;
 }

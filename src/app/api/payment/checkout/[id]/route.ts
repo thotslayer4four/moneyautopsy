@@ -29,7 +29,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const email = typeof body.email === "string" ? body.email : "guest@moneyautopsy.app";
 
   try {
-    const result = await provider.initialize({ email, amountKobo: AUTOPSY_PRICE_KOBO, reference: id });
+    const result = await provider.initialize({
+      email,
+      amountKobo: AUTOPSY_PRICE_KOBO,
+      reference: id,
+      callbackUrl: `${new URL(req.url).origin}/report`,
+    });
     return NextResponse.json({ mode: "redirect", url: result.authorizationUrl });
   } catch (err) {
     console.error("Checkout initialize failed:", err);

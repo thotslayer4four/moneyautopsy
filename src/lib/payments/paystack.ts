@@ -8,7 +8,7 @@ const PAYSTACK_BASE = "https://api.paystack.co";
  * verifyWebhookSignature before trusting any webhook payload. */
 export const paystackProvider: PaymentProvider = {
   id: "paystack",
-  async initialize({ email, amountKobo, reference }) {
+  async initialize({ email, amountKobo, reference, callbackUrl }) {
     const secretKey = process.env.PAYSTACK_SECRET_KEY;
     if (!secretKey) throw new Error("PAYSTACK_SECRET_KEY is not set");
 
@@ -22,7 +22,9 @@ export const paystackProvider: PaymentProvider = {
         email,
         amount: amountKobo,
         reference,
-        callback_url: process.env.PAYSTACK_CALLBACK_URL,
+        // An explicit env value wins; otherwise come back to whichever domain the person paid from,
+        // so no per-environment setting is needed for the redirect after payment.
+        callback_url: process.env.PAYSTACK_CALLBACK_URL || callbackUrl,
       }),
     });
 
