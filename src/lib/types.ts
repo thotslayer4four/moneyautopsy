@@ -620,9 +620,10 @@ export type PlanBucket = "essentials" | "goals" | "everyday" | "fun" | "buffer";
 export interface PlanIncome {
   /** Expected income in a typical month — what every other figure is sized against. */
   monthly: number;
-  /** "statement": evidenced in the transactions. "stated": the range they gave us, because
-   * the statement showed no earnings we could confirm. */
-  basis: "statement" | "stated";
+  /** "statement": earnings confirmed in the transactions. "estimated": nothing confirmed, so the
+   * typical month of money arriving from people that we couldn't explain. "stated": the range
+   * they gave us — only when the statement shows no credits worth planning on at all. */
+  basis: "statement" | "estimated" | "stated";
   regularity: "steady" | "irregular";
   /** The weakest full month we could compare, when there was more than one. */
   lowestMonth: number | null;

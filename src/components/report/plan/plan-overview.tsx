@@ -29,6 +29,8 @@ const INCOME_CAPTION: Record<string, (plan: MoneyPlan) => string> = {
     `Your income moves around, so we planned on a typical month rather than your best one.${
       plan.income.lowestMonth === null ? "" : plan.income.lowestMonth > 0 ? ` Your lowest month was ${formatNaira(plan.income.lowestMonth)}.` : " At least one month had nothing arriving."
     }`,
+  "estimated-steady": () => "Based on the money that arrived from people. We couldn't confirm it's earnings, so treat it as a rough guide.",
+  "estimated-irregular": () => "Based on the money that arrived from people, and it moves around. We couldn't confirm it's earnings, so treat it as a rough guide.",
   "stated-steady": () => "Based on the range you gave us. We couldn't confirm earnings in this statement.",
   "stated-irregular": () => "Based on the range you gave us, and it moves around. Treat it as a rough guide.",
 };

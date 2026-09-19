@@ -45,6 +45,32 @@ function interiorMonthTotals(incomeTx: NormalizedTransaction[], start: string, e
   return result;
 }
 
+/**
+ * A typical month for money that arrives in lumps. Middle month it actually landed in — but
+ * when most full months had nothing (one big payment in a long statement), the middle is 0,
+ * which would erase real income; the average month is the honest figure then.
+ */
+function typicalMonth(txs: NormalizedTransaction[], start: string | undefined, end: string | undefined, irregular: boolean, monthsCovered: number): number {
+  const full = start && end ? interiorMonthTotals(txs, start, end) : [];
+  if (irregular && full.length >= 2) {
+    const middle = median(full);
+    if (middle > 0) return middle;
+    const average = mean(full);
+    if (average > 0) return average;
+    // Everything landed in the partial first/last month: spread it over the months covered
+    // rather than pretend nothing came in.
+    return txs.reduce((s, t) => s + t.amount, 0) / Math.max(1, monthsCovered);
+  }
+  const byMonth = new Map<string, number>();
+  for (const t of txs) byMonth.set(t.date.slice(0, 7), (byMonth.get(t.date.slice(0, 7)) ?? 0) + t.amount);
+  return median(Array.from(byMonth.values()));
+}
+
+/** Credits from people we haven't confirmed as anything: possibly earnings, possibly not. */
+const UNCONFIRMED_CATEGORIES = new Set(["Uncertain", "Other", "Gifts & support"]);
+const MIN_UNCONFIRMED_CREDIT = 5_000;
+const MIN_ESTIMATED_MONTHLY = 5_000;
+
 export function computePlanIncome(
   transactions: NormalizedTransaction[],
   analysis: FinancialAnalysis,
@@ -65,10 +91,7 @@ export function computePlanIncome(
 
   // Pay arrives in lumps, so a typical month is the middle month it actually landed in — never
   // the total divided by days, which turns one salary in a 20-day statement into a bigger one.
-  const byMonth = new Map<string, number>();
-  for (const t of incomeTx) byMonth.set(t.date.slice(0, 7), (byMonth.get(t.date.slice(0, 7)) ?? 0) + t.amount);
-  const monthsWithIncome = Array.from(byMonth.values());
-  const earnedTypical = regularity === "irregular" && fullMonths.length >= 2 ? median(fullMonths) : median(monthsWithIncome);
+  const earnedTypical = typicalMonth(incomeTx, start, end, regularity === "irregular", months);
 
   // Money from family or gifts counts only when they told us that is part of how they live,
   // and is always marked as the less certain part.
@@ -98,7 +121,24 @@ export function computePlanIncome(
     };
   }
 
-  // Nothing in the statement we can confirm as earnings: fall back to what they told us.
+  // Nothing confirmed as earnings. Before falling back to a dropdown answer, look at what the
+  // statement itself shows arriving from people: that is real evidence, if unconfirmed.
+  const unconfirmed = transactions.filter(
+    (t) => t.direction === "in" && UNCONFIRMED_CATEGORIES.has(t.category) && t.amount >= MIN_UNCONFIRMED_CREDIT
+  );
+  const likely = unconfirmed.length > 0 ? typicalMonth(unconfirmed, start, end, true, months) : 0;
+  if (likely >= MIN_ESTIMATED_MONTHLY) {
+    return {
+      monthly: roundTo(likely, 1_000),
+      basis: "estimated",
+      regularity: "irregular",
+      lowestMonth: null,
+      otherInflow: roundTo(Math.max(0, otherInflow - likely), 1_000),
+      streams: [{ label: "Money from people, not confirmed as earnings", monthly: roundTo(likely, 1_000), reliability: "irregular" }],
+    };
+  }
+
+  // No credits worth planning on at all: all that's left is what they told us.
   const stated = STATED_MONTHLY[profile.income];
   return {
     monthly: stated,

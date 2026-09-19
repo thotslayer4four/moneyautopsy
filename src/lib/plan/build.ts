@@ -123,8 +123,9 @@ export function buildMoneyPlan(
   return plan;
 }
 
-function defaultIntro(profile: UserProfile, monthly: number, basis: "statement" | "stated", goalLabel: string | null): string {
-  const source = basis === "statement" ? "what actually comes in" : "the income range you gave us";
+function defaultIntro(profile: UserProfile, monthly: number, basis: MoneyPlan["income"]["basis"], goalLabel: string | null): string {
+  const source =
+    basis === "statement" ? "what actually comes in" : basis === "estimated" ? "the money that has actually been arriving" : "the income range you gave us";
   const goal = goalLabel ? `your goal to ${goalLabel}` : "the goal you set";
   return `Built around ${source} (about ${n(monthly)} a month), ${goal}, and how you really spend.`;
 }
@@ -152,8 +153,16 @@ function buildAssumptions(
     if (stated >= income.monthly * 1.5) {
       out.push(`You told us ${labelFor(MONTHLY_INCOME_OPTIONS, profile.income)} a month. We planned on what this statement shows, since that's what we can see.`);
     }
+  } else if (income.basis === "estimated") {
+    out.push(
+      `We couldn't confirm which money is earnings, so we planned on what actually arrived from people in a typical month (${n(income.monthly)}). That can include transfers between your own accounts or one-off help, so tell us which credits are income and the plan firms up.`
+    );
+    const stated = statedMonthlyIncome(profile.income);
+    if (stated >= income.monthly * 1.5 || income.monthly >= stated * 2) {
+      out.push(`You told us ${labelFor(MONTHLY_INCOME_OPTIONS, profile.income)} a month, which is quite different. We went with what this statement shows, since that's what we can see.`);
+    }
   } else {
-    out.push(`We couldn't confirm any earnings in this statement, so we used the low end of the range you gave us (${n(income.monthly)}). If that's off, the plan will be too.`);
+    out.push(`This statement shows no money arriving that we could plan on, so we used the low end of the range you gave us (${n(income.monthly)}). If that's off, the plan will be too.`);
   }
 
   if (income.streams.some((s) => s.label === "Support and gifts")) {

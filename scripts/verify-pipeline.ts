@@ -639,7 +639,7 @@ async function verifyIncomeCheck() {
   check("it is one question covering all three credits, worth ₦630,000", chidi?.count === 3 && chidi.total === 630000 && chidi.followers === 2);
   check("it says how much of the money in it is", (chidi?.sharePercent ?? 0) >= 90);
   check("a ₦6,000 credit is too small to ask about", !check1?.questions.some((q) => q.total === 6000));
-  check("the effect is previewed: the plan's monthly income would rise", !!chidi && chidi.monthlyBefore !== null && chidi.monthlyAfter !== null && chidi.monthlyAfter > chidi.monthlyBefore && chidi.monthlyAfter === 200000);
+  check("the effect is previewed, and the plan no longer hangs on the ₦25,000 dropdown: it already leans on what arrived (₦200,000) until confirmed", !!chidi && chidi.monthlyBefore === 200000 && chidi.monthlyAfter === 200000 && a.plan?.income.basis === "estimated");
 
   // The categorizer already recognises regular same-sender deposits as income; those aren't re-asked.
   const regular = await planFor(
@@ -769,8 +769,57 @@ async function verifySessionStore() {
   check("the upload limit sits under Vercel's 4.5 MB request cap, with headroom", MAX_UPLOAD_BYTES === 4_500_000 && MAX_UPLOAD_BYTES < 4.5 * 1024 * 1024);
 }
 
+async function incomePlanFor(rows: [string, string, number, number][], profile: UserProfile) {
+  let balance = 500_000;
+  const csv = [
+    "Value Date,Narration,Debit,Credit,Balance",
+    ...rows.map(([date, narration, debit, credit]) => {
+      balance += credit - debit;
+      return `${date},"${narration}",${debit || ""},${credit || ""},${balance}`;
+    }),
+  ].join("\n");
+  const extraction = await extractStatement({ buffer: Buffer.from(csv), filename: "p.csv", mimeType: "text/csv" });
+  const txs = await categorizeTransactions(extraction.transactions, { profile });
+  return buildMoneyPlan(txs, profile, computeFinancialAnalysis(txs, profile));
+}
+
+async function verifyIncomeFollowsStatement() {
+  console.log("\n== money plan: income follows the statement, not the dropdown ==");
+  const spend: [string, string, number, number][] = Array.from({ length: 18 }, (_, i) => [
+    `2024-0${3 + Math.floor(i / 6)}-${String(3 + (i % 6) * 4).padStart(2, "0")}`,
+    i % 2 ? "POS PURCHASE SHOPRITE LEKKI" : "UBER TRIP 4A",
+    12000,
+    0,
+  ]);
+  const rich = { ...PROFILE, income: "1m_2m" as const, incomeSources: ["salary" as const], primaryIncomeSource: "salary" as const };
+  const poor = { ...PROFILE, income: "0_50k" as const, incomeSources: ["salary" as const], primaryIncomeSource: "salary" as const };
+
+  // Money from three different people, nothing confirmable as earnings.
+  const fromPeople: [string, string, number, number][] = [
+    ...spend,
+    ["2024-03-06", "NIP TRANSFER FROM AMA NWOSU", 0, 100000],
+    ["2024-04-07", "NIP TRANSFER FROM TUNDE BELLO", 0, 100000],
+    ["2024-05-08", "NIP TRANSFER FROM CHIDI OKAFOR", 0, 100000],
+  ];
+  fromPeople.sort((a, b) => a[0].localeCompare(b[0]));
+  const a1 = await incomePlanFor(fromPeople, rich);
+  const a2 = await incomePlanFor(fromPeople, poor);
+  check("with no confirmed earnings, the plan sizes income from what arrived, not from the dropdown", a1?.income.basis === "estimated" && a1.income.monthly >= 80_000 && a1.income.monthly <= 120_000);
+  check("two very different stated incomes give the same plan when the statement is the same", a1?.income.monthly === a2?.income.monthly);
+
+  // One salary in a long statement, in the partial first month.
+  const oneSalary: [string, string, number, number][] = [...spend, ["2024-03-05", "SALARY PAYMENT ACME LTD", 0, 900000]];
+  oneSalary.sort((a, b) => a[0].localeCompare(b[0]));
+  const b1 = await incomePlanFor(oneSalary, rich);
+  check("a single confirmed salary is not erased by the months around it (no fall-back to the dropdown)", b1?.income.basis === "statement" && b1.income.monthly > 100_000 && b1.income.monthly !== 1_000_000);
+
+  const noCredits = await incomePlanFor(spend, rich);
+  check("only when nothing at all arrives does the plan fall back to what they said", noCredits?.income.basis === "stated" && noCredits.income.monthly === 1_000_000);
+}
+
 async function main() {
   await verifyCsvFixture();
+  await verifyIncomeFollowsStatement();
   await verifySessionStore();
   await verifyMateriality();
   await verifyBehavior();
