@@ -1,0 +1,2 @@
+export const AUTOPSY_PRICE_NGN = 2000;
+export const AUTOPSY_PRICE_KOBO = AUTOPSY_PRICE_NGN * 100;
