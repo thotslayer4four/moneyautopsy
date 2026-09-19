@@ -27,7 +27,7 @@ function subtypeFor(category: Category, direction: TransactionDirection): string
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const session = getSession(id);
+  const session = await getSession(id);
   if (!session) {
     return NextResponse.json({ error: "Report not found or has expired." }, { status: 404 });
   }
@@ -79,7 +79,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const rebuilt = buildReport(analysis, session.insights, moneyPlan, computeIncomeCheck(updatedTransactions, session.profile, analysis));
   rebuilt.id = id;
 
-  const updated = updateSessionReport(id, updatedTransactions, rebuilt);
+  const updated = await updateSessionReport(id, updatedTransactions, rebuilt);
   if (!updated) {
     return NextResponse.json({ error: "Could not save the correction." }, { status: 500 });
   }

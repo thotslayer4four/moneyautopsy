@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { useAutopsyStore, useStoreHydrated } from "@/lib/store";
 import { isProfileComplete } from "@/lib/profile/complete";
+import { MAX_UPLOAD_BYTES, fileTooLargeMessage } from "@/lib/upload";
 import { userProfileSchema } from "@/lib/profileSchema";
 
 export default function UploadPage() {
@@ -28,6 +29,16 @@ export default function UploadPage() {
       router.replace("/about-you");
     }
   }, [hydrated, profile, router]);
+
+  function handleFileSelected(selected: File | null) {
+    if (selected && selected.size > MAX_UPLOAD_BYTES) {
+      setFile(null);
+      setError(fileTooLargeMessage(selected.size));
+      return;
+    }
+    setError(null);
+    setFile(selected);
+  }
 
   function handleContinue() {
     if (!file) {
@@ -54,7 +65,7 @@ export default function UploadPage() {
             </p>
           </div>
 
-          <Dropzone file={file} onFileSelected={setFile} error={error} />
+          <Dropzone file={file} onFileSelected={handleFileSelected} error={error} />
 
           <Callout leadIn="Read once, never saved." icon={<Info size={16} className="shrink-0 text-accent" aria-hidden />}>
             Your statement is used only to write your autopsy, and we don&apos;t keep a copy. Your results clear after

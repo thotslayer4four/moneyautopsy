@@ -7,11 +7,11 @@ import { computeIncomeCheck, generateMoneyPlan } from "@/lib/plan";
 import { buildReport, shapeForStatus } from "@/lib/report";
 import { createSession } from "@/lib/session";
 import { userProfileSchema } from "@/lib/profileSchema";
+import { MAX_UPLOAD_BYTES, fileTooLargeMessage } from "@/lib/upload";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const MAX_FILE_BYTES = 15 * 1024 * 1024; // 15MB
 
 export async function POST(req: NextRequest) {
   let formData: FormData;
@@ -30,8 +30,8 @@ export async function POST(req: NextRequest) {
   if (typeof profileRaw !== "string") {
     return NextResponse.json({ error: "Missing user profile." }, { status: 400 });
   }
-  if (file.size > MAX_FILE_BYTES) {
-    return NextResponse.json({ error: "File is too large. Please upload a statement under 15MB." }, { status: 400 });
+  if (file.size > MAX_UPLOAD_BYTES) {
+    return NextResponse.json({ error: fileTooLargeMessage(file.size) }, { status: 413 });
   }
 
   let profileJson: unknown;
@@ -73,7 +73,12 @@ export async function POST(req: NextRequest) {
   ]);
   const report = buildReport(analysis, insights, moneyPlan, computeIncomeCheck(categorized, profile, analysis));
 
-  createSession(report, profile, categorized, insights, narrative);
+  try {
+    await createSession(report, profile, categorized, insights, narrative);
+  } catch (err) {
+    console.error("Could not save the session:", err);
+    return NextResponse.json({ error: "We couldn't save your report just now. Please try again in a moment." }, { status: 503 });
+  }
 
   return NextResponse.json({
     reportId: report.id,

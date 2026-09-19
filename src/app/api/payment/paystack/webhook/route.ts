@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
 
   if (event.event === "charge.success") {
     const reference: string | undefined = event.data?.reference;
-    if (reference) unlockSession(reference);
+    if (reference) await unlockSession(reference);
   }
 
   return NextResponse.json({ received: true });

@@ -10,6 +10,9 @@ import path from "path";
 import { extractStatement } from "../src/lib/extraction";
 import { parseStatementLines, extractPdfLines } from "../src/lib/extraction/pdf";
 import { generateReportPdf } from "../src/lib/report/pdf";
+import http from "http";
+import { createSession, getSession, unlockSession, updateSessionReport } from "../src/lib/session";
+import { MAX_UPLOAD_BYTES } from "../src/lib/upload";
 import { categorizeTransactions } from "../src/lib/categorization";
 import { computeFinancialAnalysis } from "../src/lib/analysis";
 import { generateMockInsights } from "../src/lib/llm/mock";
@@ -699,8 +702,76 @@ async function verifyIncomeCheck() {
   check("income questions are only sent once unlocked", !("incomeCheck" in free));
 }
 
+async function verifySessionStore() {
+  console.log("\n== shared session store (Redis REST) + upload limit ==");
+  // A tiny stand-in for Upstash's REST API: POST a JSON command array, get {result}.
+  const data = new Map<string, { value: string; ex: number }>();
+  const commands: string[] = [];
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      if (req.headers.authorization !== "Bearer test-token") {
+        res.writeHead(401).end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      const [cmd, key, value, , ex] = JSON.parse(body);
+      commands.push(cmd);
+      let result: unknown = null;
+      if (cmd === "SET") {
+        data.set(key, { value, ex: Number(ex) });
+        result = "OK";
+      } else if (cmd === "GET") result = data.get(key)?.value ?? null;
+      else if (cmd === "DEL") result = data.delete(key) ? 1 : 0;
+      res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ result }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, resolve));
+  const port = (server.address() as { port: number }).port;
+  process.env.UPSTASH_REDIS_REST_URL = `http://127.0.0.1:${port}`;
+  process.env.UPSTASH_REDIS_REST_TOKEN = "test-token";
+
+  try {
+    const txs = await categorizeTransactions((await extractStatement({ buffer: fs.readFileSync(path.join(FIXTURES_DIR, "mock-statement-3.csv")), filename: "x.csv", mimeType: "text/csv" })).transactions, { profile: PROFILE });
+    const a = computeFinancialAnalysis(txs, PROFILE);
+    const insights = generateMockInsights(PROFILE, a);
+    const report = buildReport(a, insights);
+
+    await createSession(report, PROFILE, txs, insights, null);
+    const stored = data.get(`money-autopsy:session:${report.id}`);
+    check("a session is written to the shared store with an expiry of at most two hours", !!stored && stored.ex > 0 && stored.ex <= 7200);
+    check("the stored record is compressed well below its raw JSON size", !!stored && stored.value.length < JSON.stringify({ report, txs }).length / 2);
+
+    const read = await getSession(report.id);
+    check("any server instance can read it back (state lives in the store, not in process memory)", read?.report.id === report.id && read.transactions.length === txs.length && read.status === "free");
+
+    await unlockSession(report.id);
+    const afterUnlock = await getSession(report.id);
+    check("unlocking (payment) is visible to the next request, wherever it lands", afterUnlock?.status === "unlocked" && afterUnlock.report.status === "unlocked");
+
+    await updateSessionReport(report.id, txs.slice(0, 10), report);
+    check("updates persist and keep the unlocked status", (await getSession(report.id))?.transactions.length === 10 && (await getSession(report.id))?.status === "unlocked");
+
+    // Expiry: a record older than two hours is treated as gone even if Redis still holds it.
+    const old = await getSession(report.id);
+    if (old) {
+      old.createdAt = Date.now() - 3 * 60 * 60 * 1000;
+      data.set(`money-autopsy:session:${report.id}`, { value: (await import("zlib")).gzipSync(JSON.stringify(old)).toString("base64"), ex: 60 });
+    }
+    check("a session past its two hours is treated as expired", (await getSession(report.id)) === undefined);
+    check("an unknown id is simply not found", (await getSession("does-not-exist")) === undefined);
+  } finally {
+    delete process.env.UPSTASH_REDIS_REST_URL;
+    delete process.env.UPSTASH_REDIS_REST_TOKEN;
+    server.close();
+  }
+
+  check("the upload limit sits under Vercel's 4.5 MB request cap, with headroom", MAX_UPLOAD_BYTES === 4_500_000 && MAX_UPLOAD_BYTES < 4.5 * 1024 * 1024);
+}
+
 async function main() {
   await verifyCsvFixture();
+  await verifySessionStore();
   await verifyMateriality();
   await verifyBehavior();
   await verifyMoneyPlan();

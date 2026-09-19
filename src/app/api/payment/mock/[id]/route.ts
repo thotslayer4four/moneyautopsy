@@ -11,12 +11,12 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   }
 
   const { id } = await params;
-  const session = getSession(id);
+  const session = await getSession(id);
   if (!session) {
     return NextResponse.json({ error: "Report not found or has expired." }, { status: 404 });
   }
 
-  const updated = unlockSession(id);
+  const updated = await unlockSession(id);
   if (!updated) {
     return NextResponse.json({ error: "Could not unlock report." }, { status: 500 });
   }

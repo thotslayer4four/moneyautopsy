@@ -12,7 +12,7 @@ import { shapeForStatus } from "@/lib/report";
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const session = getSession(id);
+  const session = await getSession(id);
   if (!session) {
     return NextResponse.json({ error: "Report not found or has expired." }, { status: 404 });
   }
@@ -20,7 +20,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const provider = getPaymentProvider();
 
   if (provider.id === "mock") {
-    const updated = unlockSession(id);
+    const updated = await unlockSession(id);
     if (!updated) return NextResponse.json({ error: "Could not unlock report." }, { status: 500 });
     return NextResponse.json({ mode: "unlocked", report: shapeForStatus(updated.report, updated.status) });
   }

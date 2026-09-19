@@ -16,7 +16,7 @@ export const maxDuration = 60;
  */
 export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const session = getSession(id);
+  const session = await getSession(id);
   if (!session) {
     return NextResponse.json({ error: "Report not found or has expired." }, { status: 404 });
   }
@@ -32,7 +32,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   const rebuilt = buildReport(analysis, insights, moneyPlan, computeIncomeCheck(session.transactions, session.profile, analysis));
   rebuilt.id = id;
 
-  const updated = updateSessionReport(id, session.transactions, rebuilt, insights, narrative);
+  const updated = await updateSessionReport(id, session.transactions, rebuilt, insights, narrative);
   if (!updated) {
     return NextResponse.json({ error: "Could not refresh the report." }, { status: 500 });
   }

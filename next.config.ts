@@ -10,6 +10,10 @@ const nextConfig: NextConfig = {
   // route instead of being dropped as "unused" files.
   outputFileTracingIncludes: {
     "/api/report/[id]/pdf": ["./src/assets/fonts/**/*"],
+    // pdfjs-dist starts its worker with a runtime import by path, which the build's file
+    // tracing can't see — so on Vercel the worker file was left out of the function and
+    // every PDF upload failed with "Cannot find module .../pdf.worker.mjs".
+    "/api/analyze": ["./node_modules/pdfjs-dist/legacy/build/**/*", "./node_modules/pdfjs-dist/standard_fonts/**/*"],
   },
 };
 

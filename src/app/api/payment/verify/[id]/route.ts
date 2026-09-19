@@ -15,7 +15,7 @@ import { shapeForStatus } from "@/lib/report";
  */
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const session = getSession(id);
+  const session = await getSession(id);
   if (!session) {
     return NextResponse.json({ error: "Report not found or has expired." }, { status: 404 });
   }
@@ -34,7 +34,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     // The report id doubles as the payment reference (see /api/payment/paystack/initialize).
     const result = await provider.verify(id);
     if (result.success) {
-      const updated = unlockSession(id);
+      const updated = await unlockSession(id);
       if (updated) return NextResponse.json({ report: shapeForStatus(updated.report, updated.status) });
     }
     return NextResponse.json({ report: shapeForStatus(session.report, session.status) });

@@ -21,6 +21,7 @@ import { IconTile } from "@/components/ui/icon-tile";
 import { LoadingQuips } from "@/components/ui/loading-quips";
 import { Spinner } from "@/components/ui/spinner";
 import { useAutopsyStore } from "@/lib/store";
+import { MAX_UPLOAD_LABEL } from "@/lib/upload";
 import type { ExtractionIssue } from "@/lib/types";
 
 const STAGES: { text: string; icon: LucideIcon }[] = [
@@ -65,10 +66,18 @@ export default function ProcessingPage() {
         formData.append("profile", JSON.stringify(profile));
 
         const res = await fetch("/api/analyze", { method: "POST", body: formData });
-        const json = await res.json();
+        // Vercel answers an oversized upload with a plain-text 413, not JSON.
+        const json = await res.json().catch(() => ({}) as { error?: string; issues?: ExtractionIssue[] });
 
         if (!res.ok) {
-          setError({ message: json.error ?? "Something went wrong reading your statement.", issues: json.issues });
+          setError({
+            message:
+              json.error ??
+              (res.status === 413
+                ? `That file is too large. The limit is ${MAX_UPLOAD_LABEL} — try a shorter date range or a CSV export.`
+                : "Something went wrong reading your statement."),
+            issues: json.issues,
+          });
           return;
         }
 

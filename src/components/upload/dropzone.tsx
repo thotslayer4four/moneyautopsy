@@ -4,6 +4,7 @@ import { useCallback, useId, useRef, useState } from "react";
 import { FileText, Upload } from "lucide-react";
 import { IconTile } from "@/components/ui/icon-tile";
 import { cn } from "@/lib/utils";
+import { MAX_UPLOAD_LABEL } from "@/lib/upload";
 
 const ACCEPTED = [".pdf", ".csv"];
 
@@ -95,7 +96,7 @@ export function Dropzone({
               <span className="hidden pointer-coarse:inline">Choose your statement</span>
             </p>
             <p className="text-xs text-foreground-muted">
-              <span className="pointer-coarse:hidden">or click to browse · </span>PDF or CSV
+              <span className="pointer-coarse:hidden">or click to browse · </span>PDF or CSV, up to {MAX_UPLOAD_LABEL}
             </p>
           </div>
         )}
