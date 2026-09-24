@@ -38,6 +38,9 @@ dev-server.log
 # vercel
 .vercel
 
+# Claude Code local session state (not project config)
+.claude/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
