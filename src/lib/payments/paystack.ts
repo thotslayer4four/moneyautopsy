@@ -24,7 +24,9 @@ export const paystackProvider: PaymentProvider = {
         reference,
         // An explicit env value wins; otherwise come back to whichever domain the person paid from,
         // so no per-environment setting is needed for the redirect after payment.
-        callback_url: process.env.PAYSTACK_CALLBACK_URL || callbackUrl,
+        // The URL worked out per request wins, so a stale PAYSTACK_CALLBACK_URL can't send
+        // people to an old address; the variable is only a fallback now.
+        callback_url: callbackUrl || process.env.PAYSTACK_CALLBACK_URL,
       }),
     });
 

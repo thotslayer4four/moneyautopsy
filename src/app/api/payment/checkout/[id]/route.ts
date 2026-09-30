@@ -3,6 +3,7 @@ import { getSession, unlockSession } from "@/lib/session";
 import { getPaymentProvider } from "@/lib/payments";
 import { AUTOPSY_PRICE_KOBO } from "@/lib/payments/pricing";
 import { shapeForStatus } from "@/lib/report";
+import { SITE_URL } from "@/lib/brand";
 
 /**
  * Single entry point the frontend calls to start payment. Which provider actually runs is
@@ -33,7 +34,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       email,
       amountKobo: AUTOPSY_PRICE_KOBO,
       reference: id,
-      callbackUrl: `${new URL(req.url).origin}/report`,
+      // Production always returns to the real domain; previews and local dev return to wherever
+      // the checkout started, so testing a preview doesn't bounce you to the live site.
+      callbackUrl: `${process.env.VERCEL_ENV === "production" ? SITE_URL : new URL(req.url).origin}/report`,
     });
     return NextResponse.json({ mode: "redirect", url: result.authorizationUrl });
   } catch (err) {
