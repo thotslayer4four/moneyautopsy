@@ -17,8 +17,10 @@ const MIN_DAYS_FOR_PLAN = 14;
 const MIN_TRANSACTIONS_FOR_PLAN = 10;
 const DEFAULT_CHANGES_SHOWN = 3;
 const SCENARIOS_SHOWN = 2;
-/** How many weeks of everyday spending the buffer covers: more when income is unpredictable. */
-const BUFFER_WEEKS = { steady: 1, irregular: 2 } as const;
+/** How many weeks of everyday and fun spending the buffer holds: more when income is unpredictable. */
+const BUFFER_WEEKS = { steady: 2, irregular: 4 } as const;
+/** A buffer is built once, over about this many months, then left alone. */
+const BUFFER_FILL_MONTHS = 3;
 /** Unexplained outflow worth telling them about, because it blurs the plan. */
 const NOTABLE_UNEXPLAINED_SHARE = 0.15;
 
@@ -77,12 +79,19 @@ export function buildMoneyPlan(
   const preference = profile.savingsPreference;
 
   const rawEveryday = spending.buckets.everyday;
+  // Savings they already have count toward the cushion first; only the rest is built, in a few
+  // monthly steps, and then the plan stops asking for it.
+  const bufferTarget = roundTo(((rawEveryday + spending.buckets.fun) / WEEKS_PER_MONTH) * BUFFER_WEEKS[income.regularity], 1_000);
+  const bufferCovered = Math.min(bufferTarget, profile.savingsBalance ?? 0);
+  const bufferLeft = bufferTarget - bufferCovered;
   const baseline: PlanBaseline = {
     essentials: roundTo(spending.buckets.essentials, 1_000),
     everyday: roundTo(rawEveryday, 1_000),
     fun: roundTo(spending.buckets.fun, 1_000),
     saving: roundTo(spending.saving, 1_000),
-    buffer: roundTo(((rawEveryday + spending.buckets.fun) / WEEKS_PER_MONTH) * BUFFER_WEEKS[income.regularity], 1_000),
+    buffer: bufferLeft > 0 ? Math.min(bufferLeft, Math.max(1_000, roundTo(bufferTarget / BUFFER_FILL_MONTHS, 1_000))) : 0,
+    bufferTarget,
+    bufferCovered,
     goalShare: GOAL_SHARE[profile.goal],
     goalPercent: preference && preference !== "dont_know" ? Number(preference) : null,
     reserved: obligations.filter((o) => o.bucket === "goals").reduce((s, o) => s + o.monthly, 0),
@@ -103,6 +112,8 @@ export function buildMoneyPlan(
     changes,
     obligations,
     savingsBalance: profile.savingsBalance ?? null,
+    unexplainedMonthly:
+      spending.uncertainShare >= NOTABLE_UNEXPLAINED_SHARE ? roundTo(analysis.uncertainOutflow.total / months, 1_000) : 0,
     defaultSelected,
     scenarioIds,
     extraRules: [],
@@ -167,7 +178,7 @@ function buildAssumptions(
   if (income.basis === "statement") {
     out.push(
       income.regularity === "irregular"
-        ? `Your income varies, so we planned on a typical month (${n(income.monthly)}) rather than the best one${income.lowestMonth !== null ? `. Your lowest month was ${n(income.lowestMonth)}` : ""}.`
+        ? `Your income varies, so we planned on your average month (${n(income.monthly)}): everything that arrived as earnings, spread over the months this statement covers${income.lowestMonth !== null ? `. Your lowest full month was ${n(income.lowestMonth)}, so keep the buffer for months like that` : ""}.`
         : `We planned on ${n(income.monthly)} a month, which is what your statement shows arriving as earnings.`
     );
     const stated = statedMonthlyIncome(profile.income);
@@ -176,7 +187,7 @@ function buildAssumptions(
     }
   } else if (income.basis === "estimated") {
     out.push(
-      `We couldn't confirm which money is earnings, so we planned on what actually arrived from people in a typical month (${n(income.monthly)}). That can include transfers between your own accounts or one-off help, so tell us which credits are income and the plan firms up.`
+      `We couldn't confirm which money is earnings, so we planned on what arrived from people in an average month (${n(income.monthly)}). That can include transfers between your own accounts or one-off help, so tell us which credits are income and the plan firms up.`
     );
     const stated = statedMonthlyIncome(profile.income);
     if (stated >= income.monthly * 1.5 || income.monthly >= stated * 2) {

@@ -153,13 +153,16 @@ export function computeSafeToSpend(input: SafeToSpendInput): { value: SafeToSpen
     .reduce((s, t) => s + (t.direction === "out" ? t.amount : -t.amount), 0);
   const goalStillToMove = Math.max(0, goalsMonthly - Math.max(0, movedSince));
 
+  // The cushion itself stays untouched, less whatever part lives in savings outside this account.
+  const bufferInAccount = Math.max(0, (baseline.bufferTarget ?? baseline.buffer) - (baseline.bufferCovered ?? 0));
+
   const working = [
     { label: "In your account", amount: roundTo(balance, 500) },
     { label: "Essentials still to come", amount: -roundTo(essentialsRemaining, 500) },
     ...billLines.map((b) => ({ label: b.label, amount: -roundTo(b.amount, 500) })),
     ...(upcoming > 0 ? [{ label: "Recurring payments due", amount: -roundTo(upcoming, 500) }] : []),
     ...(goalStillToMove > 0 ? [{ label: "Still to move toward your goal", amount: -roundTo(goalStillToMove, 500) }] : []),
-    ...(baseline.buffer > 0 ? [{ label: "Buffer you leave alone", amount: -roundTo(baseline.buffer, 500) }] : []),
+    ...(bufferInAccount > 0 ? [{ label: "Buffer you leave alone", amount: -roundTo(bufferInAccount, 500) }] : []),
   ];
   const room = working.reduce((s, w) => s + w.amount, 0);
 

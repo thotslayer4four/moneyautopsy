@@ -173,8 +173,8 @@ export function labelForRecipientKey(key: string): string {
 
 // Ask only about what matters. The aim is to resolve most of the unexplained money with the
 // fewest questions, not to interrogate.
-const COVERAGE_TARGET = 0.65; // stop once questions would explain this much of the unexplained money
-const MAX_QUESTIONS = 5; // per direction
+const COVERAGE_TARGET = 0.8; // stop once questions would explain this much of the unexplained money
+const MAX_QUESTIONS = 8; // per direction — unexplained spending blurs the plan, so it's worth asking
 const MIN_QUESTION_AMOUNT = 2_000; // never worth a person's time below this
 const MIN_UNEXPLAINED_SHARE = 0.1; // below this share of the side's total, don't ask at all
 const FLOOR_SHARE = 0.15; // above this share, always ask at least MIN_QUESTIONS

@@ -36,7 +36,7 @@ export interface PlanView {
   reset: string[];
 }
 
-const BUCKET_ORDER: PlanBucket[] = ["essentials", "goals", "everyday", "fun", "buffer"];
+const BUCKET_ORDER: PlanBucket[] = ["essentials", "goals", "everyday", "fun", "buffer", "room"];
 
 /** "if you cut this by 25%" — rounded to ₦500 so it reads like something you'd budget. */
 export function scenarioFigures(base: number, percent: number) {
@@ -65,7 +65,7 @@ export function computePlanView(plan: MoneyPlan, selectedIds: readonly string[])
   const chosen = new Set(selectedIds);
   const selected = plan.changes.filter((c) => chosen.has(c.id));
 
-  const saved: Record<PlanBucket, number> = { essentials: 0, goals: 0, everyday: 0, fun: 0, buffer: 0 };
+  const saved: Record<PlanBucket, number> = { essentials: 0, goals: 0, everyday: 0, fun: 0, buffer: 0, room: 0 };
   for (const c of selected) saved[c.bucket] += c.monthlySaving;
 
   const income = plan.income.monthly;
@@ -74,11 +74,12 @@ export function computePlanView(plan: MoneyPlan, selectedIds: readonly string[])
   const fun = Math.max(0, plan.baseline.fun - saved.fun);
 
   // Priority when money is tight: essentials, then a buffer, then goals. When there is room,
-  // what is left after the buffer is split by the goal's share; the rest is theirs, guilt-free.
+  // what is left after the buffer goes to goals by their chosen share. The rest is left
+  // unclaimed as "room" — fun stays what they actually spend on fun, not a place leftovers land.
   const pool = income - essentials - everyday - fun - plan.baseline.buffer;
   let goals = 0;
   let buffer = plan.baseline.buffer;
-  let funOut = fun;
+  let room = 0;
   let gap = 0;
   // The share they asked for wins over our default split. Saving up for a dated expense sits
   // on top, because it's money already spoken for.
@@ -91,7 +92,7 @@ export function computePlanView(plan: MoneyPlan, selectedIds: readonly string[])
   );
   if (pool >= 0) {
     goals = Math.min(pool, wanted);
-    funOut = fun + (pool - goals);
+    room = pool - goals;
   } else {
     buffer = Math.max(0, plan.baseline.buffer + pool);
     gap = Math.max(0, -(income - essentials - everyday - fun));
@@ -101,14 +102,20 @@ export function computePlanView(plan: MoneyPlan, selectedIds: readonly string[])
     essentials: roundTo(essentials, 1_000),
     goals: roundTo(goals, 1_000),
     everyday: roundTo(everyday, 1_000),
-    fun: roundTo(funOut, 1_000),
+    fun: roundTo(fun, 1_000),
     buffer: roundTo(buffer, 1_000),
+    room: roundTo(room, 1_000),
   };
-  // Rounding each part can leave the total a few thousand off the income; fun absorbs it,
-  // because it is the flexible part of the plan. When the plan overspends, nothing is forced to fit.
+  // Rounding each part can leave the total a few thousand off the income; room absorbs it (or
+  // fun, when there's no room), being the parts nothing depends on. When the plan overspends,
+  // nothing is forced to fit.
   if (gap === 0) {
-    const others = amounts.essentials + amounts.goals + amounts.everyday + amounts.buffer;
-    amounts.fun = Math.max(0, income - others);
+    const others = amounts.essentials + amounts.goals + amounts.everyday + amounts.fun + amounts.buffer;
+    amounts.room = income - others;
+    if (amounts.room < 0) {
+      amounts.fun = Math.max(0, amounts.fun + amounts.room);
+      amounts.room = 0;
+    }
   }
 
   const parts = BUCKET_ORDER.map((b) => amounts[b]);
@@ -133,21 +140,37 @@ export function computePlanView(plan: MoneyPlan, selectedIds: readonly string[])
     freedMonthly,
     freedYearly: freedMonthly * 12,
     selected,
-    rules: buildRules(plan, selected, partial),
+    rules: buildRules(plan, selected, partial, amounts.room),
     reset: buildReset(plan, selected, partial, amounts.buffer),
   };
 }
 
-function buildRules(plan: MoneyPlan, selected: PlanChange[], view: TokenValues): string[] {
+/** Unclaimed money this big a share of income is worth deciding about, before it drifts. */
+const ROOM_WORTH_A_RULE = 0.2;
+
+function buildRules(plan: MoneyPlan, selected: PlanChange[], view: TokenValues, room: number): string[] {
   // Committed bills before habits: a rent pot matters more than a food limit.
   const reserves = plan.extraRules.filter((r) => r.id.startsWith("reserve."));
   const others = plan.extraRules.filter((r) => !r.id.startsWith("reserve."));
   const rules: string[] = [];
   if (view.goals > 0) rules.push(fillTokens(plan.paydayRule, view));
+  if (room >= plan.income.monthly * ROOM_WORTH_A_RULE) {
+    rules.push(`On payday, decide what your ${formatNaira(room)} of unclaimed room is for, so it doesn't just drift.`);
+  }
   for (const r of reserves) rules.push(fillTokens(r.text, view));
   for (const c of selected) rules.push(fillTokens(c.rule, view));
   for (const r of others) rules.push(fillTokens(r.text, view));
   return rules.slice(0, MAX_RULES);
+}
+
+/** Building the cushion this month, or — when savings already cover it — leaving that part alone. */
+function bufferStep(plan: MoneyPlan, monthly: number): string[] {
+  const target = plan.baseline.bufferTarget ?? 0;
+  const covered = plan.baseline.bufferCovered ?? 0;
+  if (monthly > 0 && target > 0) return [`Put ${formatNaira(monthly)} toward a ${formatNaira(target)} buffer and leave it alone.`];
+  if (monthly > 0) return [`Keep ${formatNaira(monthly)} untouched as your buffer.`]; // reports saved before buffers had a target
+  if (covered > 0) return [`Treat ${formatNaira(covered)} of your savings as your buffer, and leave it alone.`];
+  return [];
 }
 
 function buildReset(plan: MoneyPlan, selected: PlanChange[], view: TokenValues, buffer: number): string[] {
@@ -166,9 +189,9 @@ function buildReset(plan: MoneyPlan, selected: PlanChange[], view: TokenValues, 
         ]
       : []),
   ];
-  const last = buffer > 0 ? [`Keep ${formatNaira(buffer)} untouched as your buffer.`] : [];
-  const room = MAX_RESET_STEPS - first.length - last.length;
-  const middle = selected.slice(0, Math.max(0, room)).map((c) => fillTokens(c.reset, view));
+  const last = bufferStep(plan, buffer);
+  const space = MAX_RESET_STEPS - first.length - last.length;
+  const middle = selected.slice(0, Math.max(0, space)).map((c) => fillTokens(c.reset, view));
 
   const steps = [...first, ...middle, ...last];
   const pads = [

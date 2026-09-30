@@ -489,7 +489,7 @@ async function verifyMateriality() {
   check("unexplained money under 10% of the total is not worth asking about", small.questions.length === 0);
 
   const covered = await questionsFor([...food, ["NIP TRANSFER TO 08099990001", 9000], ["NIP TRANSFER TO 08099990002", 2500], ["NIP TRANSFER TO 08099990003", 2200]]);
-  check("stops asking once the questions cover ~65% of the unexplained money", covered.questions.length === 1 && covered.questions[0].amount === 9000 && covered.notAsked.out.count === 2 && covered.coverage.out >= 65);
+  check("stops asking once the questions cover ~80% of the unexplained money", covered.questions.length === 2 && covered.questions[0].amount === 9000 && covered.notAsked.out.count === 1 && covered.coverage.out >= 80);
 
   const impact = await questionsFor([
     ...Array.from({ length: 6 }, () => ["NIP TRANSFER TO 08011110000 food", 10000] as [string, number]),
@@ -500,7 +500,7 @@ async function verifyMateriality() {
   check("a payment big enough to flip the biggest category is asked, and says why", /which category is your biggest/i.test(impact.questions.find((q) => q.amount === 12000)?.why ?? ""));
 
   const many = await questionsFor(Array.from({ length: 12 }, (_, i) => [`NIP TRANSFER TO 0809999${String(1000 + i)}`, 5000 + i * 100] as [string, number]));
-  check("even with no big items, a large unexplained share still gets a few questions, capped at 5", many.questions.length >= 3 && many.questions.length <= 5);
+  check("even with no big items, a large unexplained share still gets questions, capped at 8", many.questions.length >= 3 && many.questions.length <= 8);
   check("each question explains itself and its share", many.questions.every((q) => q.why.length > 0 && q.shareOfUnexplained > 0));
 }
 
@@ -523,6 +523,24 @@ async function planFor(rows: Row[], opening: number, profile: UserProfile, withB
   const txs = await categorizeTransactions(extraction.transactions, { profile });
   const analysis = computeFinancialAnalysis(txs, profile);
   return { txs, analysis, plan: buildMoneyPlan(txs, profile, analysis, new Date(`${analysis.periodEnd}T12:00:00Z`)), profile };
+}
+
+async function verifyIncomeRhythm() {
+  console.log("\n== income: rhythm, not calendar months ==");
+  const spendRows = (months: string[]) => months.flatMap((m) => [3, 10, 17].map((d) => [`${m}-${String(d).padStart(2, "0")}`, "POS PURCHASE SHOPRITE", 9000, 0] as Row));
+  const salary: UserProfile = { ...PROFILE, incomeSources: ["salary"], primaryIncomeSource: "salary", supports: ["no_one"] };
+  const incomeOf = async (rows: Row[], profile = salary) => (await planFor(rows.sort((x, y) => x[0].localeCompare(y[0])), 200000, profile)).plan!.income;
+
+  const shifted = await incomeOf([["2026-07-31", "SALARY ACME LTD", 0, 400000], ["2026-09-01", "SALARY ACME LTD", 0, 400000], ["2026-10-01", "SALARY ACME LTD", 0, 400000], ["2026-07-20", "POS PURCHASE SHOPRITE", 5000, 0], ["2026-10-08", "POS PURCHASE SHOPRITE", 5000, 0], ...spendRows(["2026-08", "2026-09"])]);
+  check("a payday moved across a month-end is still a steady ₦400,000, not an irregular ₦200,000", shifted.monthly === 400000 && shifted.regularity === "steady");
+
+  const weekly: Row[] = [];
+  for (let d = new Date("2026-07-03T00:00:00Z"); d < new Date("2026-09-28T00:00:00Z"); d.setUTCDate(d.getUTCDate() + 7)) weekly.push([d.toISOString().slice(0, 10), "WEEKLY WAGES ACME LTD", 0, 50000]);
+  const wages = await incomeOf([...weekly, ...spendRows(["2026-07", "2026-08", "2026-09"])]);
+  check("weekly pay is steady, and a month of it is about 4.3 weeks", wages.regularity === "steady" && wages.monthly === 217000);
+
+  const bonus = await incomeOf([["2026-07-25", "SALARY ACME LTD", 0, 400000], ["2026-08-25", "SALARY ACME LTD", 0, 400000], ["2026-08-27", "SALARY ACME LTD BONUS", 0, 250000], ["2026-09-25", "SALARY ACME LTD", 0, 400000], ...spendRows(["2026-07", "2026-08", "2026-09"])]);
+  check("a one-off bonus doesn't make a salary irregular, and isn't planned on every month", bonus.regularity === "steady" && bonus.monthly === 400000);
 }
 
 async function verifyMoneyPlan() {
@@ -615,8 +633,11 @@ async function verifyMoneyPlan() {
   if (irregular.plan) {
     check("freelance income is treated as irregular", irregular.plan.income.regularity === "irregular");
     check("irregular income gets a percentage rule instead of a fixed amount", /goalsPercent/.test(irregular.plan.paydayRule) && !/\{goals\}/.test(irregular.plan.paydayRule));
-    const { everyday, fun, buffer } = irregular.plan.baseline;
-    check("irregular income holds two weeks of everyday spending as buffer, not one", Math.abs(buffer - ((everyday + fun) / 4.345) * 2) <= 1500 && buffer > 0);
+    const { everyday, fun, buffer, bufferTarget } = irregular.plan.baseline;
+    check("irregular income builds a four-week buffer, not two", Math.abs(bufferTarget - ((everyday + fun) / 4.345) * 4) <= 1500 && bufferTarget > 0);
+    check("the buffer is built over about three months, not charged every month forever", Math.abs(buffer - bufferTarget / 3) <= 1000);
+    const covered = await planFor(freelance, 100000, { ...freelanceProfile, savingsBalance: bufferTarget });
+    check("savings that already cover the buffer mean nothing more goes into it", covered.plan?.baseline.buffer === 0 && covered.plan.baseline.bufferCovered === bufferTarget);
   } else {
     check("freelance statement produced a plan", false);
   }
@@ -695,7 +716,7 @@ async function verifyIncomeCheck() {
   check("it is one question covering all three credits, worth ₦630,000", chidi?.count === 3 && chidi.total === 630000 && chidi.followers === 2);
   check("it says how much of the money in it is", (chidi?.sharePercent ?? 0) >= 90);
   check("a ₦6,000 credit is too small to ask about", !check1?.questions.some((q) => q.total === 6000));
-  check("the effect is previewed, and the plan no longer hangs on the ₦25,000 dropdown: it already leans on what arrived (₦200,000) until confirmed", !!chidi && chidi.monthlyBefore === 200000 && chidi.monthlyAfter === 200000 && a.plan?.income.basis === "estimated");
+  check("the effect is previewed, and the plan no longer hangs on the ₦25,000 dropdown: it already leans on the average of what arrived (₦227,000) until confirmed", !!chidi && chidi.monthlyBefore === 227000 && chidi.monthlyAfter === 225000 && a.plan?.income.basis === "estimated");
 
   // The categorizer already recognises regular same-sender deposits as income; those aren't re-asked.
   const regular = await planFor(
@@ -717,7 +738,7 @@ async function verifyIncomeCheck() {
   });
   const analysisAfter = computeFinancialAnalysis(answered, lowIncomeProfile);
   const planAfter = buildMoneyPlan(answered, lowIncomeProfile, analysisAfter, new Date(`${analysisAfter.periodEnd}T12:00:00Z`));
-  check("once confirmed, the plan really does work from that income", planAfter?.income.monthly === 200000 && planAfter.income.basis === "statement");
+  check("once confirmed, the plan really does work from that income, averaged because it has no rhythm", planAfter?.income.monthly === 225000 && planAfter.income.basis === "statement" && planAfter.income.regularity === "irregular");
   check("a confirmed income is never asked about again", !computeIncomeCheck(answered, lowIncomeProfile, analysisAfter)?.questions.some((q) => q.transactionId === chidi!.transactionId));
 
   // Answering "something else" is remembered too: it isn't re-asked as a gift, and isn't income.
@@ -950,6 +971,7 @@ async function main() {
   await verifySessionStore();
   await verifyMateriality();
   await verifyBehavior();
+  await verifyIncomeRhythm();
   await verifyMoneyPlan();
   await verifyIncomeCheck();
   await verifyBettingProfit();

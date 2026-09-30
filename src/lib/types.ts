@@ -655,16 +655,17 @@ export interface ShareCard {
 // Money Plan — what to do next, built from the autopsy
 // ---------------------------------------------------------------------------
 
-/** The five kinds of money in a plan. Essentials are needs, goals are money pointed at
- * something on purpose, everyday is ordinary discretionary spending, fun is spending the
- * person is explicitly allowed to enjoy, and the buffer is money deliberately left alone. */
-export type PlanBucket = "essentials" | "goals" | "everyday" | "fun" | "buffer";
+/** The kinds of money in a plan. Essentials are needs, goals are money pointed at something on
+ * purpose, everyday is ordinary discretionary spending, fun is what they actually spend on
+ * enjoying themselves, the buffer is a cushion being built up, and room is whatever is left
+ * that nothing has claimed yet — theirs to decide, never passed off as spending. */
+export type PlanBucket = "essentials" | "goals" | "everyday" | "fun" | "buffer" | "room";
 
 export interface PlanIncome {
   /** Expected income in a typical month — what every other figure is sized against. */
   monthly: number;
   /** "statement": earnings confirmed in the transactions. "estimated": nothing confirmed, so the
-   * typical month of money arriving from people that we couldn't explain. "stated": the range
+   * average month of money arriving from people that we couldn't explain. "stated": the range
    * they gave us — only when the statement shows no credits worth planning on at all. */
   basis: "statement" | "estimated" | "stated";
   regularity: "steady" | "irregular";
@@ -683,8 +684,13 @@ export interface PlanBaseline {
   fun: number;
   /** What they already move toward goals in a typical month (net savings + debt repayment). */
   saving: number;
-  /** Money deliberately left unallocated. Sized from their own everyday spending. */
+  /** What goes into the buffer each month while it fills. 0 once it's full (their savings
+   * already cover it), so it isn't a charge on every month forever. */
   buffer: number;
+  /** The cushion itself: weeks of their own everyday and fun spending, more when income is unpredictable. */
+  bufferTarget: number;
+  /** How much of the target the savings they told us about already cover. */
+  bufferCovered: number;
   /** Share of what is left after everything else that is pointed at the goal; the rest is theirs. */
   goalShare: number;
   /** The share of income they told us they'd like to save, when they gave one. Replaces goalShare. */
@@ -787,6 +793,9 @@ export interface MoneyPlan {
   obligations: PlanObligation[];
   /** Accessible savings they told us they have. Never counted as spending money. */
   savingsBalance: number | null;
+  /** Money a month that left without us knowing what for, counted as everyday spending. Only
+   * set when it's a big enough share of what left to blur the plan; 0 otherwise. */
+  unexplainedMonthly: number;
   /** Change ids pre-selected when the plan first opens. */
   defaultSelected: string[];
   /** Change ids worth asking "what if I cut this by X%" about. */

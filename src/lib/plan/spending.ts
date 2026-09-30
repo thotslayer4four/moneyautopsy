@@ -160,7 +160,7 @@ export function computeMonthlySpending(
     // Betting and giving are taken from their own summaries below (net of winnings; plus lending).
     if (category === "Betting" || category === "Gifts & support") continue;
     const bucket = bucketFor(category, profile);
-    if (bucket && bucket !== "goals" && bucket !== "buffer") buckets[bucket] += monthly;
+    if (bucket === "essentials" || bucket === "everyday" || bucket === "fun") buckets[bucket] += monthly;
   }
   buckets.fun += bettingNet;
   const helping = helpingBucket(profile);

@@ -317,7 +317,13 @@ export function FullReport({
     plan && planView ? (
       <>
         <ReportSection title="Your money plan">
-          <PlanOverview plan={plan} view={planView} incomeQuestionCount={incomeQuestionCount} onCheckIncome={openIncomeQuestions} />
+          <PlanOverview
+            plan={plan}
+            view={planView}
+            incomeQuestionCount={incomeQuestionCount}
+            spendingQuestionCount={ub?.questions?.filter((q) => q.direction === "out").length ?? 0}
+            onCheckIncome={openIncomeQuestions}
+          />
           <SafeToSpendCard plan={plan} />
           <PlanAssumptions assumptions={plan.assumptions} />
         </ReportSection>

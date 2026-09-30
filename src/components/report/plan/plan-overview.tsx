@@ -1,7 +1,7 @@
 "use client";
 
 import { m } from "framer-motion";
-import { Coffee, House, PartyPopper, ShieldCheck, Target, TriangleAlert, type LucideIcon } from "lucide-react";
+import { CircleDashed, Coffee, House, PartyPopper, ShieldCheck, Target, TriangleAlert, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Card } from "@/components/ui/card";
@@ -11,23 +11,32 @@ import { cn } from "@/lib/utils";
 import type { MoneyPlan, PlanBucket } from "@/lib/types";
 import { PlanObligations } from "./plan-obligations";
 
-const BUCKETS: Record<PlanBucket, { label: string; icon: LucideIcon; blurb: (goal: string | null) => string; emphasis: boolean }> = {
+const BUCKETS: Record<PlanBucket, { label: string; icon: LucideIcon; blurb: (plan: MoneyPlan) => string; emphasis: boolean }> = {
   essentials: { label: "Essentials", icon: House, blurb: () => "What you genuinely need to cover", emphasis: false },
   goals: {
     label: "Goals",
     icon: Target,
-    blurb: (goal) => (goal ? `Moved toward your goal to ${goal}` : "Moved toward what you're building"),
+    blurb: (plan) => (plan.goalLabel ? `Moved toward your goal to ${plan.goalLabel}` : "Moved toward what you're building"),
     emphasis: true,
   },
   everyday: { label: "Everyday spending", icon: Coffee, blurb: () => "Eating out, shopping, the normal stuff", emphasis: false },
-  fun: { label: "Fun", icon: PartyPopper, blurb: () => "Yours to spend, no guilt attached", emphasis: true },
-  buffer: { label: "Buffer", icon: ShieldCheck, blurb: () => "Left alone for the unexpected", emphasis: false },
+  fun: { label: "Fun", icon: PartyPopper, blurb: () => "What you already spend on enjoying yourself. No guilt attached", emphasis: true },
+  buffer: { label: "Buffer", icon: ShieldCheck, blurb: bufferBlurb, emphasis: false },
+  room: { label: "Room to decide", icon: CircleDashed, blurb: () => "Not spoken for yet. Save it, spend it, or leave it", emphasis: false },
 };
+
+/** A cushion built once: how far along it is, so ₦0 a month reads as "done", not "forgotten". */
+function bufferBlurb(plan: MoneyPlan): string {
+  const { buffer, bufferTarget, bufferCovered } = plan.baseline;
+  if (!bufferTarget) return "Left alone for the unexpected";
+  if (buffer === 0 && bufferCovered >= bufferTarget) return `Your savings already cover a ${formatNaira(bufferTarget)} cushion`;
+  return `Building a ${formatNaira(bufferTarget)} cushion${bufferCovered > 0 ? `, ${formatNaira(bufferCovered)} already in savings` : ""}. This stops once it's full`;
+}
 
 const INCOME_CAPTION: Record<string, (plan: MoneyPlan) => string> = {
   "statement-steady": () => "What your statement shows arriving as earnings.",
   "statement-irregular": (plan) =>
-    `Your income moves around, so we planned on a typical month rather than your best one.${
+    `Your income moves around, so we planned on your average month.${
       plan.income.lowestMonth === null ? "" : plan.income.lowestMonth > 0 ? ` Your lowest month was ${formatNaira(plan.income.lowestMonth)}.` : " At least one month had nothing arriving."
     }`,
   "estimated-steady": () => "Based on the money that arrived from people. We couldn't confirm it's earnings, so treat it as a rough guide.",
@@ -36,7 +45,21 @@ const INCOME_CAPTION: Record<string, (plan: MoneyPlan) => string> = {
   "stated-irregular": () => "Based on the range you gave us, and it moves around. Treat it as a rough guide.",
 };
 
-function AllocationRow({ bucket, amount, percent, goal, percentFirst, overspent }: { bucket: PlanBucket; amount: number; percent: number; goal: string | null; percentFirst: boolean; overspent: boolean }) {
+function AllocationRow({
+  bucket,
+  amount,
+  percent,
+  plan,
+  percentFirst,
+  overspent,
+}: {
+  bucket: PlanBucket;
+  amount: number;
+  percent: number;
+  plan: MoneyPlan;
+  percentFirst: boolean;
+  overspent: boolean;
+}) {
   const meta = BUCKETS[bucket];
   const Icon = meta.icon;
   return (
@@ -46,7 +69,7 @@ function AllocationRow({ bucket, amount, percent, goal, percentFirst, overspent 
           <Icon size={16} className={cn("mt-1 shrink-0", meta.emphasis ? "text-accent" : "text-foreground-muted")} aria-hidden />
           <div className="flex min-w-0 flex-col gap-1">
             <span className="text-sm font-medium">{meta.label}</span>
-            <span className="text-xs leading-5 text-foreground-muted">{meta.blurb(goal)}</span>
+            <span className="text-xs leading-5 text-foreground-muted">{meta.blurb(plan)}</span>
           </div>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1 tabular-nums">
@@ -84,12 +107,15 @@ export function PlanOverview({
   view,
   incomeQuestionCount = 0,
   onCheckIncome,
+  spendingQuestionCount = 0,
 }: {
   plan: MoneyPlan;
   view: PlanView;
   /** Heavy credits we could ask about; when there are some, the gap note offers to. */
   incomeQuestionCount?: number;
   onCheckIncome?: () => void;
+  /** "What was this for?" questions about money going out; when there are some, the unexplained note offers them. */
+  spendingQuestionCount?: number;
 }) {
   const irregular = plan.income.regularity === "irregular";
   const overspent = view.gap > 0;
@@ -109,7 +135,7 @@ export function PlanOverview({
       <Card className="flex flex-col gap-8">
         <div className="flex flex-col gap-2">
           <p className="text-sm font-medium text-foreground-secondary">
-            {irregular ? "Typical monthly income" : "Expected monthly income"}
+            {irregular ? "Average monthly income" : "Expected monthly income"}
           </p>
           <p className="text-4xl font-semibold tracking-tight tabular-nums">{formatNaira(plan.income.monthly)}</p>
           <p className="max-w-prose text-sm leading-6 text-foreground-muted">{caption}</p>
@@ -126,10 +152,26 @@ export function PlanOverview({
         </div>
 
         <div className="flex flex-col divide-y divide-border border-t border-border pt-8">
-          {view.allocations.map((a) => (
-            <AllocationRow key={a.bucket} {...a} goal={plan.goalLabel} percentFirst={percentFirst} overspent={overspent} />
-          ))}
+          {view.allocations
+            .filter((a) => a.bucket !== "room" || a.amount > 0)
+            .map((a) => (
+              <AllocationRow key={a.bucket} {...a} plan={plan} percentFirst={percentFirst} overspent={overspent} />
+            ))}
         </div>
+
+        {(plan.unexplainedMonthly ?? 0) > 0 && (
+          <div className="flex flex-col gap-4">
+            <Callout leadIn="Some of this is a guess.">
+              About {formatNaira(plan.unexplainedMonthly)} a month left your account without us knowing what for, so we&apos;ve counted it as everyday spending.
+              {spendingQuestionCount > 0 && onCheckIncome ? " Tell us what it was and the plan will sort it properly." : ""}
+            </Callout>
+            {spendingQuestionCount > 0 && onCheckIncome && (
+              <Button variant="secondary" onClick={onCheckIncome} className="w-full sm:w-fit">
+                Tell us what it was for
+              </Button>
+            )}
+          </div>
+        )}
 
         <PlanObligations plan={plan} />
 
