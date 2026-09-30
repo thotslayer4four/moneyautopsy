@@ -2,15 +2,21 @@
 import type {
   AGE_OPTIONS,
   CASH_AMOUNT_OPTIONS,
+  DEBT_PAYOFF_OPTIONS,
   EXPENSE_COVERED_OPTIONS,
   FREQUENCY_OPTIONS,
   GENDER_OPTIONS,
   GOAL_OPTIONS,
   INCOME_SOURCE_OPTIONS,
+  INCOME_TIMING_OPTIONS,
   LIVING_OPTIONS,
   LOAN_AMOUNT_OPTIONS,
   MONTHLY_INCOME_OPTIONS,
   PERCEIVED_SPEND_OPTIONS,
+  REDUCE_AREA_OPTIONS,
+  RENT_FREQUENCY_OPTIONS,
+  SAVINGS_PREFERENCE_OPTIONS,
+  SCHOOL_FREQUENCY_OPTIONS,
   SITUATION_OPTIONS,
   SUPPORT_OPTIONS,
   YES_NO_OPTIONS,
@@ -143,6 +149,12 @@ export type LoanAmount = Value<typeof LOAN_AMOUNT_OPTIONS>;
 export type YesNo = Value<typeof YES_NO_OPTIONS>;
 export type CashAmount = Value<typeof CASH_AMOUNT_OPTIONS>;
 export type PerceivedSpend = Value<typeof PERCEIVED_SPEND_OPTIONS>;
+export type RentFrequency = Value<typeof RENT_FREQUENCY_OPTIONS>;
+export type SchoolFrequency = Value<typeof SCHOOL_FREQUENCY_OPTIONS>;
+export type DebtPayoff = Value<typeof DEBT_PAYOFF_OPTIONS>;
+export type IncomeTiming = Value<typeof INCOME_TIMING_OPTIONS>;
+export type SavingsPreference = Value<typeof SAVINGS_PREFERENCE_OPTIONS>;
+export type ReduceArea = Value<typeof REDUCE_AREA_OPTIONS>;
 
 /**
  * Context that can't be read off a statement. It informs interpretation and tone — it is
@@ -168,6 +180,29 @@ export interface UserProfile {
   withdrawsCash: YesNo;
   cashMonthly?: CashAmount;
   perceivedOverspending: PerceivedSpend;
+
+  // ---- For the Money Plan. All optional: each screen can be skipped, and older answers
+  // saved before these existed must still validate. Amounts are whole naira; months are
+  // "YYYY-MM". Each is only read when the answer it hangs off still applies (rent only while
+  // rent is among expensesCovered, and so on). ----
+  incomeTiming?: IncomeTiming;
+  savingsPreference?: SavingsPreference;
+  rentAmount?: number;
+  rentFrequency?: RentFrequency;
+  rentNextDue?: string;
+  schoolAmount?: number;
+  schoolFrequency?: SchoolFrequency;
+  schoolNextDue?: string;
+  supportMonthly?: number;
+  hasDebt?: YesNo;
+  debtMonthly?: number;
+  debtPayoff?: DebtPayoff;
+  savingsBalance?: number;
+  hasUpcomingExpense?: YesNo;
+  upcomingWhat?: string;
+  upcomingAmount?: number;
+  upcomingDue?: string;
+  willingToReduce?: ReduceArea[];
 }
 
 // ---------------------------------------------------------------------------
@@ -220,6 +255,10 @@ export interface UncertainQuestion {
   date: string;
   amount: number;
   description: string;
+  /** The untouched original narration line — shown in full, never trimmed or summarized, so
+   * the person can match it against their own bank app or alert to identify the transaction
+   * for certain, whatever our own parsed `name`/`description` may have gotten wrong. */
+  rawDescription: string;
   /** Other unexplained transactions with the same recipient/sender identity — they will
    * follow the answer to this one (at lower confidence), so they needn't be asked. */
   followers: number;
@@ -470,6 +509,10 @@ export interface FinancialAnalysis {
     /** What those expenses actually cost the person after being paid back. */
     netBurden: number;
   };
+  /** Money that arrived and left again for a different person shortly after — someone using
+   * this account to forward money on, e.g. "send this ₦X to my brother for me". Neither
+   * income nor spending, whatever the outflow's own remark happens to say. */
+  passThrough: { total: number; count: number; people: number } | null;
   balance: BalanceInsights | null;
   timePatterns: TimePatterns | null;
   ledger: LedgerEntry[];
@@ -644,6 +687,38 @@ export interface PlanBaseline {
   buffer: number;
   /** Share of what is left after everything else that is pointed at the goal; the rest is theirs. */
   goalShare: number;
+  /** The share of income they told us they'd like to save, when they gave one. Replaces goalShare. */
+  goalPercent: number | null;
+  /** Goal money already spoken for each month: saving up for an upcoming expense by its due date. */
+  reserved: number;
+}
+
+/**
+ * Something they pay that a statement can't size or time on its own: rent paid yearly, school
+ * fees per semester, a debt repayment, a big expense coming up. `monthly` is the true monthly
+ * cost the plan sets aside; the timing fields say whether that is enough by the due date.
+ */
+export interface PlanObligation {
+  id: "rent" | "school" | "debt" | "upcoming";
+  /** Lowercase, reads mid-sentence: "rent", "school fees", "a new laptop". */
+  label: string;
+  /** One payment, as they told us. */
+  amount: number;
+  /** Months between payments; null when there is no fixed cadence to spread it over. */
+  everyMonths: number | null;
+  /** What the plan sets aside each month. 0 when it couldn't be spread honestly. */
+  monthly: number;
+  bucket: "essentials" | "goals";
+  /** "YYYY-MM" of the next payment, when known. */
+  dueMonth: string | null;
+  /** Whole months from the plan date until it is due (0 = this month). */
+  monthsUntilDue: number | null;
+  /** What `monthly` adds up to by the due date, when that falls short of the amount. */
+  setAsideByDue: number | null;
+  /** Per month needed to have all of it by the due date, starting from nothing, when that is more than `monthly`. */
+  catchUpMonthly: number | null;
+  /** Extra plain-words context: "paid off in 6–12 months". */
+  note: string | null;
 }
 
 export interface PlanStat {
@@ -680,6 +755,8 @@ export interface PlanChange {
   vsGoalAmount: number | null;
   /** Whether "if you cut this by X%" is a fair question to ask about it. */
   scenario: boolean;
+  /** They told us this is an area they're willing to spend less on. */
+  openToIt: boolean;
 }
 
 export interface SafeToSpend {
@@ -706,6 +783,10 @@ export interface MoneyPlan {
   /** Their stated goal, in their own words, or null when not meaningful ("other"). */
   goalLabel: string | null;
   changes: PlanChange[];
+  /** Non-monthly bills and commitments they told us about, spread into monthly amounts. */
+  obligations: PlanObligation[];
+  /** Accessible savings they told us they have. Never counted as spending money. */
+  savingsBalance: number | null;
   /** Change ids pre-selected when the plan first opens. */
   defaultSelected: string[];
   /** Change ids worth asking "what if I cut this by X%" about. */
@@ -746,6 +827,7 @@ export interface Report {
   balance: BalanceInsights | null;
   shareCards: ShareCard[];
   walletPockets: FinancialAnalysis["walletPockets"];
+  passThrough: FinancialAnalysis["passThrough"];
   moneyPersonality: MoneyPersonality;
   userBeliefComparison: UserBeliefComparison;
   recommendations: Recommendation[];
@@ -763,7 +845,7 @@ export interface Report {
 
 /** Shape of the report actually sent to the client — locked fields are masked server-side. */
 export type ClientReport =
-  | (Omit<Report, "overview" | "lockedFindings" | "recommendations" | "thirtyDayReset" | "categoryBreakdown" | "unusualTransactions" | "recurringExpenses" | "topRecipients" | "userBeliefComparison" | "patterns" | "uncertainBreakdown" | "inflowBreakdown" | "outflowSplit" | "highlights" | "savings" | "walletPockets" | "balance" | "shareCards" | "moneyPlan" | "incomeCheck"> & {
+  | (Omit<Report, "overview" | "lockedFindings" | "recommendations" | "thirtyDayReset" | "categoryBreakdown" | "unusualTransactions" | "recurringExpenses" | "topRecipients" | "userBeliefComparison" | "patterns" | "uncertainBreakdown" | "inflowBreakdown" | "outflowSplit" | "highlights" | "savings" | "walletPockets" | "passThrough" | "balance" | "shareCards" | "moneyPlan" | "incomeCheck"> & {
       status: "free";
       /** Headline numbers only — what was actually spent and what counts as earned income
        * are part of the paid report, so they are not sent to a free-status client. */

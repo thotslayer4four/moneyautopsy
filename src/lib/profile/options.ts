@@ -141,6 +141,69 @@ export const PERCEIVED_SPEND_OPTIONS = [
   { value: "dont_know", label: "honestly, i don't know" },
 ] as const;
 
+// ---- Money Plan: what a statement can't show about timing and obligations ----
+
+export const RENT_FREQUENCY_OPTIONS = [
+  { value: "monthly", label: "monthly" },
+  { value: "quarterly", label: "every 3 months" },
+  { value: "biannual", label: "every 6 months" },
+  { value: "yearly", label: "yearly" },
+  { value: "other", label: "other" },
+] as const;
+
+export const SCHOOL_FREQUENCY_OPTIONS = [
+  { value: "monthly", label: "monthly" },
+  { value: "semester", label: "every semester" },
+  { value: "yearly", label: "yearly" },
+  { value: "other", label: "other" },
+] as const;
+
+/** Months between payments. "other" has no fixed cadence, so it can't be spread honestly. */
+export const MONTHS_BETWEEN: Record<string, number | null> = {
+  monthly: 1,
+  quarterly: 3,
+  biannual: 6,
+  semester: 6,
+  yearly: 12,
+  other: null,
+};
+
+export const DEBT_PAYOFF_OPTIONS = [
+  { value: "under_3m", label: "within 3 months" },
+  { value: "3_6m", label: "3–6 months" },
+  { value: "6_12m", label: "6–12 months" },
+  { value: "over_1y", label: "more than a year" },
+  { value: "not_sure", label: "not sure" },
+] as const;
+
+export const INCOME_TIMING_OPTIONS = [
+  { value: "monthly", label: "once a month" },
+  { value: "weekly", label: "every week" },
+  { value: "several", label: "several times a month" },
+  { value: "irregular", label: "irregularly" },
+] as const;
+
+export const SAVINGS_PREFERENCE_OPTIONS = [
+  { value: "5", label: "5%" },
+  { value: "10", label: "10%" },
+  { value: "20", label: "20%" },
+  { value: "30", label: "30% or more" },
+  { value: "dont_know", label: "i don't know" },
+] as const;
+
+export const REDUCE_AREA_OPTIONS = [
+  { value: "food", label: "food / eating out" },
+  { value: "shopping", label: "shopping" },
+  { value: "transport", label: "transportation" },
+  { value: "data_airtime", label: "data / airtime" },
+  { value: "subscriptions", label: "subscriptions" },
+  { value: "cash", label: "cash withdrawals" },
+  { value: "betting", label: "betting" },
+  { value: "helping_others", label: "helping other people" },
+  { value: "none", label: "none of these" },
+  { value: "not_sure", label: "not sure yet" },
+] as const;
+
 type Options = readonly { value: string; label: string }[];
 
 export function labelFor(options: Options, value: string | undefined | null): string | null {

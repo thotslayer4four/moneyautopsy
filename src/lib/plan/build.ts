@@ -1,9 +1,10 @@
 import type { FinancialAnalysis, MoneyPlan, NormalizedTransaction, PlanBaseline, UserProfile } from "@/lib/types";
-import { GOAL_OPTIONS, MONTHLY_INCOME_OPTIONS, labelFor } from "@/lib/profile/options";
+import { GOAL_OPTIONS, MONTHLY_INCOME_OPTIONS, REDUCE_AREA_OPTIONS, RENT_FREQUENCY_OPTIONS, SCHOOL_FREQUENCY_OPTIONS, labelFor } from "@/lib/profile/options";
 import { daysBetween, periodInMonths } from "@/lib/analysis/helpers";
 import { formatNaira } from "@/lib/format";
 import { computePlanIncome, statedMonthlyIncome } from "./income";
 import { computeMonthlySpending, supportsDependants } from "./spending";
+import { computeObligations, formatMonth, statedCategoryMonthly } from "./obligations";
 import { buildChanges, buildExtraRules } from "./changes";
 import { computeSafeToSpend } from "./safeToSpend";
 import { computePlanView } from "./allocate";
@@ -64,8 +65,16 @@ export function buildMoneyPlan(
   if (!isEnoughToPlan(analysis)) return null;
 
   const months = periodInMonths(analysis.periodStart, analysis.periodEnd);
+  const today = now.toISOString().slice(0, 10);
   const income = computePlanIncome(transactions, analysis, profile, months);
-  const spending = computeMonthlySpending(transactions, analysis, profile, months);
+  const obligations = computeObligations(profile, today);
+  const debt = obligations.find((o) => o.id === "debt");
+  const spending = computeMonthlySpending(transactions, analysis, profile, months, {
+    categoryMonthly: statedCategoryMonthly(obligations),
+    supportMonthly: profile.supportMonthly ?? 0,
+    debtMonthly: debt?.monthly ?? 0,
+  });
+  const preference = profile.savingsPreference;
 
   const rawEveryday = spending.buckets.everyday;
   const baseline: PlanBaseline = {
@@ -75,9 +84,11 @@ export function buildMoneyPlan(
     saving: roundTo(spending.saving, 1_000),
     buffer: roundTo(((rawEveryday + spending.buckets.fun) / WEEKS_PER_MONTH) * BUFFER_WEEKS[income.regularity], 1_000),
     goalShare: GOAL_SHARE[profile.goal],
+    goalPercent: preference && preference !== "dont_know" ? Number(preference) : null,
+    reserved: obligations.filter((o) => o.bucket === "goals").reduce((s, o) => s + o.monthly, 0),
   };
 
-  const ctx = { analysis, profile, months, income: income.monthly, spending };
+  const ctx = { analysis, profile, months, income: income.monthly, spending, obligations };
   const changes = buildChanges(ctx);
   const defaultSelected = changes.filter((c) => !c.optional).slice(0, DEFAULT_CHANGES_SHOWN).map((c) => c.id);
   const scenarioIds = changes.filter((c) => c.scenario && !c.optional).slice(0, SCENARIOS_SHOWN).map((c) => c.id);
@@ -90,9 +101,11 @@ export function buildMoneyPlan(
     baseline,
     goalLabel,
     changes,
+    obligations,
+    savingsBalance: profile.savingsBalance ?? null,
     defaultSelected,
     scenarioIds,
-    extraRules: buildExtraRules(ctx),
+    extraRules: [],
     paydayRule: irregular
       ? "Every time money comes in, move {goalsPercent} toward your goal before you spend the rest."
       : "Move {goals} to savings the day your income lands, before you spend anything else.",
@@ -108,6 +121,9 @@ export function buildMoneyPlan(
   // Safe-to-spend leans on what the plan sets aside for goals, so it is computed from the
   // plan as first shown and stays put while someone explores other choices.
   const firstView = computePlanView(plan, defaultSelected);
+  // A weekly number is the easiest limit to keep when spending already runs past income, or
+  // when reining it in is the whole point.
+  plan.extraRules = buildExtraRules(ctx, { weeklyLimit: firstView.gap > 0 || profile.goal === "stop_overspending" });
   const safe = computeSafeToSpend({
     transactions,
     analysis,
@@ -115,12 +131,17 @@ export function buildMoneyPlan(
     income,
     baseline,
     goalsMonthly: firstView.goals,
-    today: now.toISOString().slice(0, 10),
+    obligations,
+    today,
   });
   plan.safeToSpend = safe.value;
   plan.safeToSpendNote = safe.note;
   plan.assumptions = buildAssumptions(profile, analysis, plan, months);
   return plan;
+}
+
+function joinWords(words: string[]): string {
+  return words.length <= 1 ? (words[0] ?? "") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
 }
 
 function defaultIntro(profile: UserProfile, monthly: number, basis: MoneyPlan["income"]["basis"], goalLabel: string | null): string {
@@ -181,6 +202,48 @@ function buildAssumptions(
     );
   }
 
+  for (const o of plan.obligations) {
+    if (o.id === "rent" || o.id === "school") {
+      const freqLabel = o.id === "rent" ? labelFor(RENT_FREQUENCY_OPTIONS, profile.rentFrequency) : labelFor(SCHOOL_FREQUENCY_OPTIONS, profile.schoolFrequency);
+      if (!o.everyMonths) {
+        out.push(`You told us ${o.label} is ${n(o.amount)} on an irregular schedule, so we couldn't spread it into a monthly amount and used what this statement shows instead.`);
+      } else if (o.everyMonths > 1) {
+        out.push(`You told us ${o.label} is ${n(o.amount)} ${freqLabel}. Instead of counting it as one month's spending, the plan sets aside ${n(o.monthly)} a month toward it.`);
+      } else {
+        out.push(`You told us ${o.label} is ${n(o.amount)} a month, so that's what the plan uses, whichever account you pay it from.`);
+      }
+    }
+    if (o.id === "debt") {
+      out.push(`You told us you repay about ${n(o.amount)} a month on debt${o.note ? `, ${o.note}` : ""}. It counts as an essential, because it isn't optional.`);
+    }
+    if (o.id === "upcoming") {
+      out.push(
+        o.monthly > 0 && o.dueMonth
+          ? o.monthsUntilDue === 0
+            ? `${cap(o.label)} (${n(o.amount)}) is due this month, so all of it is set aside inside your goals.`
+            : `To have ${n(o.amount)} for ${o.label} by ${formatMonth(o.dueMonth)}, the plan puts ${n(o.monthly)} a month toward it inside your goals.`
+          : `You mentioned ${o.label} (${n(o.amount)}) but not when it's due, so the plan doesn't reserve for it yet.`
+      );
+    }
+  }
+
+  if (plan.savingsBalance !== null) {
+    const due = plan.safeToSpend?.working.filter((w) => / due /.test(w.label)) ?? [];
+    out.push(
+      plan.savingsBalance > 0
+        ? `You have about ${n(plan.savingsBalance)} saved. It's never counted as spending money${due.length > 0 ? ", so if you'll pay a bill due soon from it, you have more room day to day than safe to spend shows" : ""}.`
+        : "You told us you have nothing saved yet, which is why the buffer matters so much in this plan."
+    );
+  }
+
+  const areas = (profile.willingToReduce ?? []).filter((a) => a !== "not_sure" && a !== "none");
+  if (areas.length > 0) {
+    const labels = areas.map((a) => labelFor(REDUCE_AREA_OPTIONS, a)).filter((l): l is string => !!l);
+    out.push(`You said you're open to spending less on ${joinWords(labels)}, so changes there come first. Anything else is only there if you want it.`);
+  } else if (profile.willingToReduce?.includes("none")) {
+    out.push("You said there's nothing you want to cut back on, so every change below is only a suggestion you can opt into.");
+  }
+
   if (analysis.support.sent > 0) {
     out.push(
       supportsDependants(profile)
@@ -189,9 +252,11 @@ function buildAssumptions(
     );
   }
 
+  // Rent or fees they told us about are in the plan whichever account they're paid from.
+  const stated = new Set<string>(plan.obligations.filter((o) => o.everyMonths && (o.id === "rent" || o.id === "school")).map((o) => o.id));
   const unseen = profile.expensesCovered.flatMap((e) => {
     const expected = EXPENSE_LABEL[e];
-    if (!expected) return [];
+    if (!expected || stated.has(e)) return [];
     const seen = analysis.categoryBreakdown.some((c) => expected.categories.includes(c.category) && c.total > 0);
     return seen ? [] : [expected.label];
   });

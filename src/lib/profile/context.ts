@@ -8,7 +8,10 @@ import {
   LIVING_OPTIONS,
   LOAN_AMOUNT_OPTIONS,
   MONTHLY_INCOME_OPTIONS,
+  INCOME_TIMING_OPTIONS,
   PERCEIVED_SPEND_OPTIONS,
+  REDUCE_AREA_OPTIONS,
+  SAVINGS_PREFERENCE_OPTIONS,
   SITUATION_OPTIONS,
   SUPPORT_OPTIONS,
   labelFor,
@@ -42,5 +45,12 @@ export function describeProfileForLlm(profile: UserProfile) {
     keepsCashInHand: profile.withdrawsCash === "yes",
     statedMonthlyCashWithdrawals: labelFor(CASH_AMOUNT_OPTIONS, profile.cashMonthly),
     whatTheyThinkTheyOverspendOn: labelFor(PERCEIVED_SPEND_OPTIONS, profile.perceivedOverspending),
+    // Amounts they told us (rent, debt, savings…) reach the model only through the Money Plan's
+    // own figures, where every number it may repeat is known.
+    howIncomeArrives: labelFor(INCOME_TIMING_OPTIONS, profile.incomeTiming),
+    shareTheyWantToSave: labelFor(SAVINGS_PREFERENCE_OPTIONS, profile.savingsPreference),
+    isPayingOffDebt: profile.hasDebt ? profile.hasDebt === "yes" : null,
+    hasABigExpenseComing: profile.hasUpcomingExpense ? profile.hasUpcomingExpense === "yes" : null,
+    areasTheyAreWillingToSpendLessOn: profile.willingToReduce ? labels(REDUCE_AREA_OPTIONS, profile.willingToReduce) : null,
   };
 }

@@ -205,6 +205,21 @@ export function generateMockInsights(profile: UserProfile, analysis: FinancialAn
     });
   }
 
+  // ---- money that only passed through (forwarded to someone else) ----
+  const pt = analysis.passThrough;
+  if (pt) {
+    add({
+      id: "pass-through",
+      title: `${naira(pt.total)} passed through your account for ${pt.people === 1 ? "someone else" : "other people"}`,
+      summary: `${plural(pt.count, "transfer")} arrived and left again for ${pt.people === 1 ? "someone else" : `${pt.people} different people`} within a few days — none of it is really yours.`,
+      detail: `a near-identical amount left shortly after each of these arrived, going to someone other than who sent it — the classic "send this to my brother for me" pattern. it doesn't count as income you earned or money you spent, whatever the payment itself looked like it was for.`,
+      category: "Transfers",
+      importance: 4,
+      dataPoints: [`${naira(pt.total)} passed through`, `${plural(pt.count, "transfer")}`, `${pt.people} ${pt.people === 1 ? "person" : "people"}`],
+      confidence: 0.75,
+    });
+  }
+
   // ---- savings (net — pockets like OWealth move money in and out on every payment) ----
   const sv = analysis.savings;
   const grossIn = sv.savedOut + sv.investedOut;

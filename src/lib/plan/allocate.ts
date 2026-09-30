@@ -1,6 +1,6 @@
 import type { MoneyPlan, PlanBucket, PlanChange } from "@/lib/types";
 import { formatNaira } from "@/lib/format";
-import { percentsOf, roundTo } from "./numbers";
+import { WEEKS_PER_MONTH, percentsOf, roundTo } from "./numbers";
 
 /**
  * Everything here is arithmetic on numbers the plan already holds, so it runs the same on
@@ -22,6 +22,11 @@ export interface PlanView {
   allocations: PlanAllocation[];
   goals: number;
   goalsPercent: number;
+  /** What they asked to save (their chosen share of income, plus anything saved up for), when
+   * that is more than fits this month. Null when it fits, or they didn't choose a share. */
+  goalsWanted: number | null;
+  /** Everyday and fun spending, per week — the easiest limit to keep an eye on. */
+  weekly: number;
   /** How much more than arrives each month the plan still spends, when it does. */
   gap: number;
   freedMonthly: number;
@@ -39,8 +44,13 @@ export function scenarioFigures(base: number, percent: number) {
   return { monthly, yearly: monthly * 12 };
 }
 
-export function fillTokens(text: string, view: Pick<PlanView, "goals" | "goalsPercent">): string {
-  return text.replace(/\{goals\}/g, formatNaira(view.goals)).replace(/\{goalsPercent\}/g, `${view.goalsPercent}%`);
+type TokenValues = Pick<PlanView, "goals" | "goalsPercent"> & Partial<Pick<PlanView, "weekly">>;
+
+export function fillTokens(text: string, view: TokenValues): string {
+  return text
+    .replace(/\{goals\}/g, formatNaira(view.goals))
+    .replace(/\{goalsPercent\}/g, `${view.goalsPercent}%`)
+    .replace(/\{weekly\}/g, formatNaira(view.weekly ?? 0));
 }
 
 /** The sentence that ties betting to the goal — computed from the chosen plan, so it stays true as it changes. */
@@ -70,9 +80,17 @@ export function computePlanView(plan: MoneyPlan, selectedIds: readonly string[])
   let buffer = plan.baseline.buffer;
   let funOut = fun;
   let gap = 0;
+  // The share they asked for wins over our default split. Saving up for a dated expense sits
+  // on top, because it's money already spoken for.
+  // (Reports saved before these existed don't carry them.)
+  const goalPercent = plan.baseline.goalPercent ?? null;
+  const reserved = plan.baseline.reserved ?? 0;
+  const wanted = roundTo(
+    Math.max(plan.baseline.saving, goalPercent !== null ? (income * goalPercent) / 100 : plan.baseline.goalShare * Math.max(0, pool)) + reserved,
+    1_000
+  );
   if (pool >= 0) {
-    const target = Math.max(plan.baseline.saving, plan.baseline.goalShare * pool);
-    goals = Math.min(pool, roundTo(target, 1_000));
+    goals = Math.min(pool, wanted);
     funOut = fun + (pool - goals);
   } else {
     buffer = Math.max(0, plan.baseline.buffer + pool);
@@ -100,13 +118,17 @@ export function computePlanView(plan: MoneyPlan, selectedIds: readonly string[])
   const allocations = BUCKET_ORDER.map((bucket, i) => ({ bucket, amount: amounts[bucket], percent: percents[i] }));
   const goalsPercent = allocations.find((a) => a.bucket === "goals")?.percent ?? 0;
 
-  const partial = { goals: amounts.goals, goalsPercent };
+  const weekly = roundTo((amounts.everyday + amounts.fun) / WEEKS_PER_MONTH, 500);
+  const partial = { goals: amounts.goals, goalsPercent, weekly };
   const freedMonthly = selected.reduce((s, c) => s + c.monthlySaving, 0);
+  const askedForMore = goalPercent !== null || reserved > 0;
 
   return {
     allocations,
     goals: amounts.goals,
     goalsPercent,
+    goalsWanted: askedForMore && wanted > amounts.goals ? wanted : null,
+    weekly,
     gap: roundTo(gap, 1_000),
     freedMonthly,
     freedYearly: freedMonthly * 12,
@@ -116,22 +138,34 @@ export function computePlanView(plan: MoneyPlan, selectedIds: readonly string[])
   };
 }
 
-function buildRules(plan: MoneyPlan, selected: PlanChange[], view: Pick<PlanView, "goals" | "goalsPercent">): string[] {
+function buildRules(plan: MoneyPlan, selected: PlanChange[], view: TokenValues): string[] {
+  // Committed bills before habits: a rent pot matters more than a food limit.
+  const reserves = plan.extraRules.filter((r) => r.id.startsWith("reserve."));
+  const others = plan.extraRules.filter((r) => !r.id.startsWith("reserve."));
   const rules: string[] = [];
   if (view.goals > 0) rules.push(fillTokens(plan.paydayRule, view));
+  for (const r of reserves) rules.push(fillTokens(r.text, view));
   for (const c of selected) rules.push(fillTokens(c.rule, view));
-  for (const r of plan.extraRules) rules.push(fillTokens(r.text, view));
+  for (const r of others) rules.push(fillTokens(r.text, view));
   return rules.slice(0, MAX_RULES);
 }
 
-function buildReset(
-  plan: MoneyPlan,
-  selected: PlanChange[],
-  view: Pick<PlanView, "goals" | "goalsPercent">,
-  buffer: number
-): string[] {
+function buildReset(plan: MoneyPlan, selected: PlanChange[], view: TokenValues, buffer: number): string[] {
   // The first and last steps are fixed points; the chosen changes fill whatever room is left.
-  const first = view.goals > 0 ? [fillTokens(plan.paydayReset, view)] : [];
+  // A bill paid in one big lump gets its pot started in the first month.
+  const pot = (plan.obligations ?? [])
+    .filter((o) => o.bucket === "essentials" && (o.everyMonths ?? 0) > 1 && o.monthly > 0)
+    .sort((a, b) => b.monthly - a.monthly)[0];
+  const first = [
+    ...(view.goals > 0 ? [fillTokens(plan.paydayReset, view)] : []),
+    ...(pot
+      ? [
+          pot.monthsUntilDue === 0
+            ? `Have ${formatNaira(pot.amount)} ready for ${pot.label}, due this month.`
+            : `Open a separate pot for ${pot.label} and move ${formatNaira(pot.monthly)} into it.`,
+        ]
+      : []),
+  ];
   const last = buffer > 0 ? [`Keep ${formatNaira(buffer)} untouched as your buffer.`] : [];
   const room = MAX_RESET_STEPS - first.length - last.length;
   const middle = selected.slice(0, Math.max(0, room)).map((c) => fillTokens(c.reset, view));

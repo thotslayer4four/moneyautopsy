@@ -38,6 +38,10 @@ HARD RULES, no exceptions:
 6. Person-to-person transfers are a mechanism, not a purpose. Do not call one a gift, loan, support or
    income unless the supplied category says so. peopleTransfers.explainedPercent tells you how much of the
    transfers we can actually explain — an honest finding is often "we can only explain X% of this".
+6b. passThrough is money that arrived and left again for a DIFFERENT person shortly after — someone using
+   this account to forward money on (e.g. "send this to my brother for me"). It is never the person's own
+   income or spending, however the outflow's own remark reads (it may look like "school fees" or "rent" —
+   that obligation belongs to whoever it was forwarded to, not to this person).
 7. "Uncertain" is an honesty signal, not a category. Never call it their biggest category. If it is large,
    that is itself a finding — name the specific top recipients/senders from uncertainBreakdown so the person
    can recognise and label them.
@@ -76,7 +80,7 @@ candidateFindings: findings the deterministic engine already computed and verifi
 numbers. Treat them as your starting point: rewrite the strongest ones in your own voice (reusing the candidate's
 id), merge overlaps, and keep their numbers EXACTLY as given. Do not drop a candidate with importance 5, or any
 of these behavioral ones — runway, low-balance, betting-sessions, late-night, ritual, ledger, price-creep,
-fee-efficiency — unless the data contradicts it. You may add your own findings beyond the candidates when the
+fee-efficiency, pass-through — unless the data contradicts it. You may add your own findings beyond the candidates when the
 summary supports them; never add one the data does not support.
 
 Pidgin taglines: betting.tagline and dataAirtime.tagline are ready-made one-liners chosen by how heavy the
@@ -132,6 +136,7 @@ export function buildUserPrompt(profile: UserProfile, analysis: FinancialAnalysi
       support: analysis.support,
       loans: analysis.loans,
       reimbursements: analysis.reimbursements,
+      passThrough: analysis.passThrough,
       mostExpensiveDay: analysis.mostExpensiveDay,
       balance: analysis.balance ? { ...analysis.balance, series: undefined } : undefined,
       timePatterns: analysis.timePatterns,

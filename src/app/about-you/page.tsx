@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, m } from "framer-motion";
 import {
@@ -8,13 +8,19 @@ import {
   Banknote,
   Briefcase,
   Cake,
+  CalendarClock,
   Coins,
+  CreditCard,
+  GraduationCap,
   Handshake,
   HandCoins,
   HandHeart,
   House,
+  KeyRound,
+  PiggyBank,
   Receipt,
   ScanSearch,
+  SlidersHorizontal,
   Sparkles,
   Star,
   Target,
@@ -28,13 +34,27 @@ import { SiteHeader } from "@/components/layout/site-header";
 import { OptionCard } from "@/components/onboarding/option-card";
 import { Button } from "@/components/ui/button";
 import { IconTile } from "@/components/ui/icon-tile";
+import { MoneyInput, TextInput } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ProgressBar } from "@/components/ui/progress";
 import { useAutopsyStore } from "@/lib/store";
 import { sentenceCase } from "@/lib/format";
 import type { UserProfile } from "@/lib/types";
 import { Callout } from "@/components/ui/callout";
 import { userProfileSchema } from "@/lib/profileSchema";
-import { firstUnansweredIndex, isStepAnswered, steps, type ChoiceStep, type MultiStep, type Option } from "./steps";
+import {
+  detailsComplete,
+  firstUnansweredIndex,
+  isStepAnswered,
+  steps,
+  upcomingMonths,
+  visibleFields,
+  type ChoiceStep,
+  type DetailField,
+  type DetailsStep,
+  type MultiStep,
+  type Option,
+} from "./steps";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
@@ -57,6 +77,13 @@ const STEP_ICONS: Record<string, LucideIcon> = {
   withdrawsCash: Banknote,
   cashMonthly: Coins,
   perceivedOverspending: ScanSearch,
+  rentAmount: KeyRound,
+  schoolAmount: GraduationCap,
+  supportMonthly: HandHeart,
+  hasDebt: CreditCard,
+  savingsBalance: PiggyBank,
+  hasUpcomingExpense: CalendarClock,
+  willingToReduce: SlidersHorizontal,
 };
 const ADVANCE_DELAY_MS = 200;
 const MAX_KEY_HINTS = 9;
@@ -164,6 +191,8 @@ export default function AboutYouPage() {
                   isLast={isLast}
                   onFinish={goNext}
                 />
+              ) : step.type === "details" ? (
+                <DetailsQuestion step={step} profile={profile} onPatch={patch} onAdvance={advanceSoon} onContinue={goNext} />
               ) : (
                 <MultiQuestion step={step} profile={profile} onPatch={patch} onContinue={goNext} />
               )}
@@ -184,10 +213,13 @@ function OptionGrid({
   options,
   isSelected,
   onSelect,
+  keyHints = true,
 }: {
   options: readonly Option[];
   isSelected: (value: string) => boolean;
   onSelect: (value: string) => void;
+  /** Off where number keys aren't wired up (screens with several questions). */
+  keyHints?: boolean;
 }) {
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -195,7 +227,7 @@ function OptionGrid({
         <OptionCard
           key={opt.value}
           label={sentenceCase(opt.label)}
-          hint={i < MAX_KEY_HINTS ? String(i + 1) : undefined}
+          hint={keyHints && i < MAX_KEY_HINTS ? String(i + 1) : undefined}
           selected={isSelected(opt.value)}
           onClick={() => onSelect(opt.value)}
         />
@@ -214,6 +246,9 @@ function useNumberKeys(options: readonly Option[], onPick: (value: string) => vo
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+      // Typing an amount must never pick an option.
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable]")) return;
       const option = latest.current.options[Number(e.key) - 1];
       if (option) latest.current.onPick(option.value);
     }
@@ -331,6 +366,146 @@ function MultiQuestion({
       <Button size="lg" arrow glow className="self-start" disabled={selected.length === 0} onClick={handleContinue}>
         Continue
       </Button>
+    </div>
+  );
+}
+
+function OptionGroup({ label, children }: { label?: string; children: ReactNode }) {
+  return (
+    <div role="group" aria-label={label} className="flex flex-col gap-4">
+      {label && <p className="text-base font-medium text-foreground">{label}</p>}
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Several related answers on one screen, revealed as they become relevant. Always skippable:
+ * these only sharpen the plan, so "skip" clears the screen rather than leaving half an answer.
+ */
+function DetailsQuestion({
+  step,
+  profile,
+  onPatch,
+  onAdvance,
+  onContinue,
+}: {
+  step: DetailsStep;
+  profile: Partial<UserProfile>;
+  onPatch: Patch;
+  onAdvance: () => void;
+  onContinue: () => void;
+}) {
+  const fields = visibleFields(step, profile);
+  const complete = detailsComplete(step, profile);
+  const months = upcomingMonths();
+
+  function set(key: keyof UserProfile, value: unknown) {
+    const next = { ...profile, [key]: value };
+    const update: Partial<Record<keyof UserProfile, unknown>> = { [key]: value };
+    // Anything this answer hides goes too, so a stale follow-up never reaches the plan.
+    for (const f of step.fields) if (f.showWhen && !f.showWhen(next) && next[f.key] !== undefined) update[f.key] = undefined;
+    onPatch(update);
+    if (step.doneWhen?.(next)) onAdvance();
+  }
+
+  function skip() {
+    onPatch(Object.fromEntries(step.fields.map((f) => [f.key, undefined])));
+    onContinue();
+  }
+
+  const control = (field: DetailField) => {
+    const id = `field-${field.key}`;
+    switch (field.type) {
+      case "choice":
+        return (
+          <OptionGroup label={field.label}>
+            <OptionGrid options={field.options} isSelected={(v) => profile[field.key] === v} onSelect={(v) => set(field.key, v)} keyHints={false} />
+          </OptionGroup>
+        );
+      case "amount":
+        return (
+          <FieldLabel id={id} label={field.label} fallback={step.question}>
+            <MoneyInput
+              id={id}
+              value={profile[field.key] as number | undefined}
+              onChange={(v) => set(field.key, v)}
+              placeholder={field.placeholder}
+              autoFocus={fields[0] === field}
+            />
+          </FieldLabel>
+        );
+      case "text":
+        return (
+          <FieldLabel id={id} label={field.label} fallback={step.question}>
+            <TextInput
+              id={id}
+              value={profile[field.key] as string | undefined}
+              onChange={(v) => set(field.key, v || undefined)}
+              placeholder={field.placeholder}
+              maxLength={field.maxLength}
+            />
+          </FieldLabel>
+        );
+      case "month":
+        return (
+          <FieldLabel id={id} label={field.label} fallback={step.question}>
+            <Select items={months} value={(profile[field.key] as string | undefined) ?? null} onValueChange={(v) => set(field.key, v ?? undefined)}>
+              <SelectTrigger id={id} className="w-full rounded-2xl px-6 text-base">
+                <SelectValue placeholder="Not sure yet" />
+              </SelectTrigger>
+              <SelectContent align="start">
+                {months.map((mo) => (
+                  <SelectItem key={mo.value} value={mo.value}>
+                    {mo.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FieldLabel>
+        );
+    }
+  };
+
+  return (
+    <form
+      className="flex flex-col gap-8"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (complete) onContinue();
+      }}
+    >
+      {fields.map((field, i) => (
+        <m.div
+          key={field.key}
+          initial={i === 0 ? false : { opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3, ease: EASE }}
+        >
+          {control(field)}
+        </m.div>
+      ))}
+
+      <div className="flex flex-wrap items-center gap-4">
+        <Button type="submit" size="lg" arrow glow disabled={!complete}>
+          Continue
+        </Button>
+        <Button type="button" variant="ghost" onClick={skip}>
+          Skip this
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+/** A visible label, or — for the screen's own question — one only screen readers hear. */
+function FieldLabel({ id, label, fallback, children }: { id: string; label?: string; fallback: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-4">
+      <label htmlFor={id} className={label ? "text-base font-medium text-foreground" : "sr-only"}>
+        {label ?? fallback}
+      </label>
+      {children}
     </div>
   );
 }

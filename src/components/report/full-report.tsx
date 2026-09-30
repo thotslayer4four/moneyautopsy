@@ -91,9 +91,21 @@ export function FullReport({
   const movedEntries = report.categoryBreakdown
     .filter((c) => c.kind === "moved")
     .map((c) => {
-      if (c.category === "Transfers" && (report.walletPockets?.count ?? 0) > 0) {
-        const wp = report.walletPockets!;
-        movedNotes.Transfers = `Includes ${formatNaira(wp.movedOut)} moved into and ${formatNaira(wp.movedIn)} back out of wallet pockets like OPay's OWealth. That's your wallet shuffling money between its own pockets — not saving, not spending.`;
+      if (c.category === "Transfers" && ((report.walletPockets?.count ?? 0) > 0 || report.passThrough)) {
+        const notes: string[] = [];
+        const wp = report.walletPockets;
+        if (wp && wp.count > 0) {
+          notes.push(
+            `Includes ${formatNaira(wp.movedOut)} moved into and ${formatNaira(wp.movedIn)} back out of wallet pockets like OPay's OWealth — your wallet shuffling money between its own pockets, not saving or spending.`
+          );
+        }
+        const pt = report.passThrough;
+        if (pt) {
+          notes.push(
+            `Includes ${formatNaira(pt.total)} that passed through for ${pt.people === 1 ? "someone else" : `${pt.people} other people`} — money you forwarded on, never yours to spend or count as income.`
+          );
+        }
+        movedNotes.Transfers = notes.join(" ");
         return c;
       }
       if (c.category !== "Savings") return c;

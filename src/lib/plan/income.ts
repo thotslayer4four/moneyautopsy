@@ -84,7 +84,7 @@ export function computePlanIncome(
   // Needs at least two full months before the data can call income irregular by itself.
   const fullMonths = start && end ? interiorMonthTotals(incomeTx, start, end) : [];
 
-  const variableByNature = VARIABLE_SOURCES.includes(profile.primaryIncomeSource);
+  const variableByNature = VARIABLE_SOURCES.includes(profile.primaryIncomeSource) || profile.incomeTiming === "irregular";
   const variableByData =
     fullMonths.length >= 2 && (fullMonths.some((m) => m === 0) || stddev(fullMonths) / (mean(fullMonths) || 1) > IRREGULAR_VARIATION);
   const regularity: PlanIncome["regularity"] = variableByNature || variableByData ? "irregular" : "steady";

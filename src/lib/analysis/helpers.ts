@@ -163,6 +163,14 @@ export function isStrongRecipientKey(key: string): boolean {
   return false;
 }
 
+/** A recipient we have no name for shows up as a bare phone/account number — labelled here so
+ * it reads as "Phone 08031234567" or "Account 5316426923" rather than an unexplained number. */
+export function labelForRecipientKey(key: string): string {
+  if (key.startsWith("phone:")) return `Phone ${key.slice(6)}`;
+  if (key.startsWith("acct:")) return `Account ${key.slice(5)}`;
+  return key.replace(/^(name|desc):/, "");
+}
+
 // Ask only about what matters. The aim is to resolve most of the unexplained money with the
 // fewest questions, not to interrogate.
 const COVERAGE_TARGET = 0.65; // stop once questions would explain this much of the unexplained money
@@ -276,10 +284,11 @@ export function pickQuestions(
       return {
         transactionId: c.biggest.id,
         direction,
-        name: c.biggest.merchant ?? c.key.replace(/^(phone|acct|name|desc):/, ""),
+        name: c.biggest.merchant ?? labelForRecipientKey(c.key),
         date: c.biggest.date,
         amount: Math.round(c.biggest.amount),
         description: c.biggest.description,
+        rawDescription: c.biggest.rawDescription,
         followers: c.strong ? groups.get(c.key)!.length - 1 : 0,
         why: c.impact ?? (i === 0 ? `The biggest unexplained ${direction === "in" ? "sender" : "recipient"} — ${pct}% of what we couldn't explain` : `${pct}% of what we couldn't explain`),
         shareOfUnexplained: pct,

@@ -15,6 +15,7 @@ function buildTeaserBullets(analysis: FinancialAnalysis): string[] {
   const d = analysis.dataAirtime;
   const top = topKnownCategory(analysis.categoryBreakdown);
 
+  if (analysis.passThrough) candidates.push("some money in your account wasn't really yours — it just passed through.");
   if (tp?.betting?.sessions.count) candidates.push("you made several betting deposits in one sitting.");
   if (analysis.balance?.runway) candidates.push("your money tends to run low soon after it arrives.");
   if (tp?.lateNight && tp.lateNight.percentOfSpend >= 25) candidates.push("a big share of your spending happens late at night.");
@@ -106,6 +107,15 @@ function buildHighlights(analysis: FinancialAnalysis): Highlight[] {
       note: `${top.name}: ${n(top.sent)} sent, ${n(top.received)} received`,
     });
   }
+  const pt = analysis.passThrough;
+  if (pt) {
+    out.push({
+      id: "pass-through",
+      label: "passed through your account",
+      value: n(pt.total),
+      note: `${pt.count === 1 ? "1 payment" : `${pt.count} payments`} to ${pt.people === 1 ? "1 person" : `${pt.people} people`} — not your spending or income`,
+    });
+  }
   return out.slice(0, 8);
 }
 
@@ -140,6 +150,7 @@ export function buildReport(
     highlights: buildHighlights(analysis),
     savings: analysis.savings,
     walletPockets: analysis.walletPockets,
+    passThrough: analysis.passThrough,
     balance: analysis.balance,
     shareCards: buildShareCards(analysis),
     moneyPersonality: insights.financialPersonality,

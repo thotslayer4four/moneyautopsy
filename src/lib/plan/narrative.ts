@@ -15,7 +15,7 @@ import { computePlanView } from "./allocate";
 const MAX_TEXT_LENGTH = 320;
 const DEFAULT_SHOWN = 3;
 /** Placeholders the plan fills in from the chosen options, so wording never goes stale. */
-const ALLOWED_TOKENS = new Set(["{goals}", "{goalsPercent}"]);
+const ALLOWED_TOKENS = new Set(["{goals}", "{goalsPercent}", "{weekly}"]);
 
 const narrativeSchema = z.object({
   intro: z.string().optional(),
@@ -55,11 +55,14 @@ better for this person and return them as {key, text}. Skip a slot if the defaul
 HARD RULES
 1. Never write a number the plan didn't give you. Every ₦ amount must appear, exactly, in the figures or
    the slot's current text. Never calculate, sum, convert, annualise or round anything yourself.
-2. Keep placeholders exactly as written: {goals} and {goalsPercent}. Never replace them with a number.
+2. Keep placeholders exactly as written: {goals}, {goalsPercent} and {weekly}. Never replace them with a number.
 3. SWAP, DON'T STOP. Never tell someone to stop spending on something. Preserve their lifestyle. Prefer
    "eat at home twice more a week", "set an allowance", "buy one bigger plan" over "cut", "stop", "quit".
 4. Helping people, lending and family support are part of their real life. Give them a limit of their own;
    never treat them as a failure. Betting is theirs to decide: describe what it cost, never tell them to quit.
+   Rent, school fees, debt repayments and "obligations" are commitments they told us about: help them plan
+   for them (a separate pot, setting aside monthly), never suggest cutting them.
+   Changes marked openToIt are areas they told us they're willing to spend less on; favour those.
 5. Never shame, moralise or mock. Borrowing is not a character flaw. No "you should", no scolding.
 6. Savings and outcomes are possibilities, never promises. "could", "would", "if the pattern stayed similar".
 7. Gender is context only and must never shape the wording.
@@ -91,11 +94,22 @@ function figuresFor(plan: MoneyPlan) {
     baseline: plan.baseline,
     goal: plan.goalLabel,
     plannedMonth: Object.fromEntries(view.allocations.map((a) => [a.bucket, { amount: a.amount, percent: a.percent }])),
+    obligations: (plan.obligations ?? []).map((o) => ({
+      label: o.label,
+      amount: o.amount,
+      everyMonths: o.everyMonths,
+      setAsideMonthly: o.monthly,
+      dueMonth: o.dueMonth,
+      neededMonthlyToBeReady: o.catchUpMonthly,
+      note: o.note,
+    })),
+    savingsBalance: plan.savingsBalance,
     changes: plan.changes.map((c) => ({
       id: c.id,
       label: c.label,
       nature: c.nature,
       optional: c.optional,
+      openToIt: c.openToIt || undefined,
       monthlyNow: c.monthlyNow,
       monthlyTarget: c.monthlyTarget,
       monthlySaving: c.monthlySaving,

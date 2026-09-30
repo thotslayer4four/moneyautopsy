@@ -9,7 +9,7 @@ import { matchSignal, isLikelyBankFee, type SignalContext } from "./signals";
 import { detectPaymentMethod, detectPaymentProcessor, isTransferRail, resolveMerchant } from "./channels";
 import { extractRecipientKey } from "./recipientKey";
 import { isSelfTransfer } from "./selfTransfer";
-import { pairReversals, linkGroupReimbursements } from "./postPasses";
+import { pairReversals, linkGroupReimbursements, linkPassThroughs } from "./postPasses";
 import { isCashWithdrawalDescription } from "@/lib/extraction/normalize";
 import { mean, stddev, daysBetween } from "@/lib/analysis/helpers";
 import { classifyUncertainTransactions } from "@/lib/llm/categorizeUncertain";
@@ -35,7 +35,8 @@ interface RecipientEvidence {
  *   1. self-transfers, then known merchants and narration keywords — direction-aware, and
  *      blind to payment rails (NIP/POS/transfer say how money moved, not what it was for)
  *   2. pairing: reversals matched to the debit they undo; groups of friends' transfers that
- *      split a large expense matched to it as reimbursements
+ *      split a large expense matched to it as reimbursements; a transfer that arrives and
+ *      leaves again for someone else shortly after, matched as money passing through
  *   3. recipient/sender memory from this same statement, even from one prior occurrence,
  *      discounted when that person has served several different purposes
  *   4. recurring patterns (a tight repeating outflow reads as a bill; a tight repeating
@@ -55,9 +56,10 @@ export async function categorizeTransactions(
 
   const paired = pairReversals(withPrimary);
   const withGroups = linkGroupReimbursements(paired);
+  const withPassThrough = linkPassThroughs(withGroups);
 
-  const memory = buildRecipientMemory(withGroups);
-  const withMemory = withGroups.map((tx) => applyRecipientMemory(tx, memory));
+  const memory = buildRecipientMemory(withPassThrough);
+  const withMemory = withPassThrough.map((tx) => applyRecipientMemory(tx, memory));
 
   const withRecurringOut = applyRecurringOutflow(withMemory);
   const withRecurringIn = applyRecurringInflow(withRecurringOut, profile);
@@ -190,6 +192,9 @@ function buildRecipientMemory(transactions: NormalizedTransaction[]): Map<string
 
   for (const tx of transactions) {
     if (tx.categoryConfidence < 0.6 || MEMORY_EXCLUDED.includes(tx.category)) continue;
+    // A pass-through or self-transfer says nothing about what this recipient usually means —
+    // it's a one-off structural inference, not evidence a future payment to them is the same.
+    if (tx.subtype === "pass_through" || tx.subtype === "own_account") continue;
     const key = memoryKey(tx);
     if (!key) continue;
     if (!buckets.has(key)) buckets.set(key, []);
@@ -328,7 +333,7 @@ function unresolvedReason(tx: NormalizedTransaction): string {
 
   if (tx.direction === "in") {
     if (tx.paymentMethod === "cash_deposit") return "cash deposited — the statement doesn't say where the cash came from";
-    return "money received from a person with no useful remark — it could be income, a gift, a loan, a reimbursement or a transfer between your own accounts, so it isn't assumed to be income";
+    return "money received from a person with no useful remark — it could be income, a gift, a loan, a reimbursement, a transfer between your own accounts, or money you passed on to someone else, so it isn't assumed to be income";
   }
   if (tx.paymentMethod === "pos") {
     return `POS payment with no merchant we recognise — the statement doesn't say what was bought, and a POS payment is never assumed to be a cash withdrawal.${remita}`;

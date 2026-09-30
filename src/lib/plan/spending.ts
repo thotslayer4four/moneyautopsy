@@ -59,6 +59,18 @@ export function bucketFor(category: Category, profile: UserProfile): PlanBucket 
 /** The bucket for money given to or lent to other people. */
 export const helpingBucket = (profile: UserProfile): PlanBucket => (supportsDependants(profile) ? "essentials" : "fun");
 
+/** What they told us, for the parts of a month a statement can't size on its own. */
+export interface StatedSpending {
+  /** True monthly cost of rent / school fees, replacing the statement's lumpy figure. */
+  categoryMonthly: Partial<Record<Category, number>>;
+  /** What they usually set aside to support people, some of which never shows in a statement. */
+  supportMonthly: number;
+  /** A committed monthly debt repayment. */
+  debtMonthly: number;
+}
+
+export const NOTHING_STATED: StatedSpending = { categoryMonthly: {}, supportMonthly: 0, debtMonthly: 0 };
+
 export interface MonthlySpending {
   /** Typical monthly spend per category, net of what friends paid back. */
   byCategory: Map<Category, { monthly: number; count: number }>;
@@ -68,6 +80,8 @@ export interface MonthlySpending {
   /** Net money lent (lent minus repaid to them), per month. */
   lentNet: number;
   supportSent: number;
+  /** Support as the statement shows it, before any amount they told us. */
+  supportSeen: number;
   bettingNet: number;
   /** Money already being moved toward goals: net savings and debt repayment, per month. */
   saving: number;
@@ -83,7 +97,8 @@ export function computeMonthlySpending(
   transactions: NormalizedTransaction[],
   analysis: FinancialAnalysis,
   profile: UserProfile,
-  months: number
+  months: number,
+  stated: StatedSpending = NOTHING_STATED
 ): MonthlySpending {
   const byId = new Map(transactions.map((t) => [t.id, t]));
 
@@ -125,9 +140,16 @@ export function computeMonthlySpending(
     const lumps = lumpsByMonth.get(category);
     byCategory.set(category, { monthly: lumps ? median(Array.from(lumps.values())) : net / months, count });
   }
+  // Rent paid yearly shows up as one huge month; what they told us about it is the true monthly
+  // cost, and it applies even when they pay it from another account this statement can't see.
+  for (const [category, monthly] of Object.entries(stated.categoryMonthly) as [Category, number][]) {
+    byCategory.set(category, { monthly, count: byCategory.get(category)?.count ?? 0 });
+  }
 
   const bettingNet = (analysis.betting?.netOutflow ?? 0) / months;
-  const supportSent = analysis.support.sent / months;
+  // Support often goes as cash or from another account, so the amount they told us is a floor.
+  const supportSeen = analysis.support.sent / months;
+  const supportSent = profile.supports.includes("no_one") ? supportSeen : Math.max(supportSeen, stated.supportMonthly);
   const lentNet = Math.max(0, analysis.loans.lent - analysis.loans.receivedBack) / months;
   // Only fronted costs someone paid back nothing for are real burden; the rest came back.
   const frontedNet = Math.max(0, fronted - unlinkedReceived) / months;
@@ -144,10 +166,13 @@ export function computeMonthlySpending(
   const helping = helpingBucket(profile);
   if (helping === "essentials" || helping === "fun") buckets[helping] += supportSent + lentNet;
   buckets.everyday += frontedNet;
+  // A repayment they're committed to is a need, not something they choose to put toward goals.
+  buckets.essentials += stated.debtMonthly;
 
   // Savings and repayments are lumps too: one transfer in a short statement is one month's worth.
   const lumpMonths = Math.max(1, months);
-  const saving = (Math.max(0, analysis.savings.netSaved) + analysis.loans.repaid) / lumpMonths;
+  const repaidTowardGoals = stated.debtMonthly > 0 ? 0 : analysis.loans.repaid;
+  const saving = (Math.max(0, analysis.savings.netSaved) + repaidTowardGoals) / lumpMonths;
   const uncertainShare = analysis.totalOutflow > 0 ? analysis.uncertainOutflow.total / analysis.totalOutflow : 0;
 
   return {
@@ -156,6 +181,7 @@ export function computeMonthlySpending(
     buckets: { essentials: buckets.essentials, everyday: buckets.everyday, fun: buckets.fun },
     lentNet,
     supportSent,
+    supportSeen,
     bettingNet,
     saving,
     uncertainShare,

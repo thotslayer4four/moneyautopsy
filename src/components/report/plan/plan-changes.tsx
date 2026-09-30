@@ -31,6 +31,7 @@ function ChangeCard({
           {index && <span className="tabular-nums">{index}</span>}
           <CategoryIcon category={change.category} size={16} className="text-accent" aria-hidden />
           {change.label}
+          {change.openToIt && <span className="text-accent">· you said you&apos;re open to this</span>}
         </span>
         <span className="inline-flex items-center gap-2 whitespace-nowrap rounded-full border border-border bg-background px-3 py-1 text-xs font-medium tabular-nums text-foreground">
           {change.nature === "cut" ? (

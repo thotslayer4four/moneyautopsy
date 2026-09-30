@@ -172,6 +172,33 @@ async function verifyCategorizationImprovements() {
   );
 }
 
+async function verifyBankChargeSanity() {
+  console.log("\n== bank charges: a big payment can't masquerade as a small fee ==");
+  const csv = [
+    "Value Date,Narration,Debit,Credit,Balance",
+    '01-Mar-2024,"TRANSFER TO ABC SCHOOL OF NURSING | processing fee",120000,,880000',
+    '02-Mar-2024,"TRANSFER TO XYZ VENTURES | VAT on service invoice #2201",85000,,795000',
+    '03-Mar-2024,"SMS ALERT CHARGE",25,,794975',
+    '04-Mar-2024,"ACCOUNT MAINTENANCE FEE",18000,,776975',
+    '05-Mar-2024,"ACCOUNT MAINTENANCE CHARGE",25000,,751975',
+  ].join("\n");
+  const extraction = await extractStatement({ buffer: Buffer.from(csv), filename: "fees.csv", mimeType: "text/csv" });
+  const txs = await categorizeTransactions(extraction.transactions, { profile: PROFILE });
+  const cat = (text: string) => txs.find((t) => t.rawDescription.includes(text))?.category;
+
+  check("a ₦120,000 'processing fee' is never a bank charge — it's a real payment, not a fee", cat("SCHOOL OF NURSING") !== "Banking fees");
+  check("a ₦85,000 'VAT on...' invoice payment is never a bank charge", cat("XYZ VENTURES") !== "Banking fees");
+  check("tiny real fees (an SMS alert) still count as bank charges", cat("SMS ALERT") === "Banking fees");
+  check("a ₦18,000 fee-worded charge, still under the sanity ceiling, counts as a bank charge", cat("ACCOUNT MAINTENANCE FEE") === "Banking fees");
+  check("a ₦25,000 fee-worded charge, over the ceiling, does not", cat("ACCOUNT MAINTENANCE CHARGE") !== "Banking fees");
+
+  const analysis = computeFinancialAnalysis(txs, PROFILE);
+  check(
+    "the reported bank-charge total excludes the two large payments entirely — nowhere near ₦205,000",
+    analysis.bankCharges === 25 + 18000 && analysis.bankCharges < 120000
+  );
+}
+
 async function verifyNigerianFixture() {
   console.log("\n== mock-statement-2.csv (Nigerian transaction intelligence) ==");
   const buffer = fs.readFileSync(path.join(FIXTURES_DIR, "mock-statement-2.csv"));
@@ -328,6 +355,35 @@ async function verifyQuestionSelection() {
   check("three same-day payments to one number become ONE question about the largest, not a ₦63,000 blob", qs.filter((q) => q.description.includes("08011112222")).length === 1 && same?.amount === 50000 && same.followers === 2);
   check("the biggest unexplained payment is asked first", qs[0]?.amount === 120000);
   check("a ₦1,000 payment is not worth asking about", !qs.some((q) => q.amount === 1000) && a.uncertainBreakdown.notAsked.out.count === 1);
+
+  // When we have no name at all, the question is labelled by what we do have — a phone or
+  // account number, said plainly — never a bare, unexplained string of digits.
+  check("a recipient we only know by phone number is labelled 'Phone ...', not a bare number", same?.name === "Phone 08011112222");
+  check("the full original narration travels through untouched, exactly as the statement printed it", same?.rawDescription === "NIP TRANSFER TO 08011112222");
+}
+
+async function verifyFullNarrationOnQuestions() {
+  console.log("\n== 'what was this for' shows the full narration, not a shortened one ==");
+  // A realistic multi-segment PDF line: counterparty name, bank name and account number, no
+  // remark — everything a person needs to recognise it themselves.
+  const lines = [
+    "10 Aug 2026 09:15:00 10 Aug 2026 Transfer to CHIDINMA OKORO EZE | Guaranty Trust Bank | 0123456789 45,000.00 -- 0.00 Mobile 555",
+  ];
+  const { transactions: rawTx } = parseStatementLines(lines);
+  check(
+    "extraction keeps the full bank name and account number in rawDescription",
+    rawTx[0]?.rawDescription.includes("Guaranty Trust Bank") && rawTx[0]?.rawDescription.includes("0123456789")
+  );
+
+  const txs = await categorizeTransactions(rawTx, { profile: PROFILE });
+  const a = computeFinancialAnalysis(txs, PROFILE);
+  const q = [...a.uncertainBreakdown.questions, ...a.uncertainBreakdown.topRecipients].length
+    ? a.uncertainBreakdown.questions.find((x) => x.rawDescription.includes("CHIDINMA"))
+    : undefined;
+  check(
+    "the question built from it keeps that same full text — the bank name and account number are still there for the person to check against their own app",
+    !!q && q.rawDescription.includes("Guaranty Trust Bank") && q.rawDescription.includes("0123456789") && q.rawDescription.includes("CHIDINMA OKORO EZE")
+  );
 }
 
 async function verifyBettingProfit() {
@@ -817,8 +873,79 @@ async function verifyIncomeFollowsStatement() {
   check("only when nothing at all arrives does the plan fall back to what they said", noCredits?.income.basis === "stated" && noCredits.income.monthly === 1_000_000);
 }
 
+async function verifyPassThrough() {
+  console.log("\n== money that only passes through (forwarded to someone else) ==");
+
+  // 1) Money arrives, and a near-identical amount leaves the same day for a DIFFERENT person —
+  //    whose remark ("school fees") would otherwise be keyword-matched as the account
+  //    holder's own Education spending. The structural match should override that.
+  const csv1 = [
+    "Value Date,Narration,Debit,Credit,Balance",
+    '01-Mar-2024,"NIP TRANSFER FROM JARED OKORO",,50000,150000',
+    '01-Mar-2024,"NIP TRANSFER TO CHIDI EZE | school fees",50000,,100000',
+  ].join("\n");
+  const ex1 = await extractStatement({ buffer: Buffer.from(csv1), filename: "pt1.csv", mimeType: "text/csv" });
+  const txs1 = await categorizeTransactions(ex1.transactions, { profile: PROFILE });
+  const inflow1 = txs1.find((t) => t.direction === "in");
+  const outflow1 = txs1.find((t) => t.direction === "out");
+  check(
+    "money that arrives and leaves again for someone else is 'Transfers' on both sides, overriding the outflow's own keyword category",
+    inflow1?.category === "Transfers" && inflow1.subtype === "pass_through" && outflow1?.category === "Transfers" && outflow1.subtype === "pass_through"
+  );
+  check("the two legs are linked to each other", inflow1?.relatedTransactionId === outflow1?.id && outflow1?.relatedTransactionId === inflow1?.id);
+  const a1 = computeFinancialAnalysis(txs1, PROFILE);
+  check("it counts as neither income nor spending", a1.earnedIncome === 0 && a1.outflowSplit.spent === 0);
+  check("analysis.passThrough reports the total, count and number of people", a1.passThrough?.total === 50000 && a1.passThrough.count === 1 && a1.passThrough.people === 1);
+
+  // 2) A small cut kept (fee absorbed elsewhere) still counts — the outflow can be a little
+  //    less than what arrived, but the match isn't forced when it's a coincidence.
+  const csv2 = [
+    "Value Date,Narration,Debit,Credit,Balance",
+    '05-Mar-2024,"NIP TRANSFER FROM AISHA BELLO",,40000,90000',
+    '06-Mar-2024,"NIP TRANSFER TO YUSUF DANJUMA",39200,,50800',
+  ].join("\n");
+  const ex2 = await extractStatement({ buffer: Buffer.from(csv2), filename: "pt2.csv", mimeType: "text/csv" });
+  const txs2 = await categorizeTransactions(ex2.transactions, { profile: PROFILE });
+  check(
+    "a slightly smaller amount, a day later, still matches as a pass-through",
+    txs2.find((t) => t.direction === "in")?.subtype === "pass_through" && txs2.find((t) => t.direction === "out")?.subtype === "pass_through"
+  );
+
+  // 3) Money that just bounces back to the SAME person isn't "forwarding" — leave it alone.
+  const csv3 = [
+    "Value Date,Narration,Debit,Credit,Balance",
+    '10-Mar-2024,"NIP TRANSFER FROM TOLU ADEYEMI",,20000,70000',
+    '10-Mar-2024,"NIP TRANSFER TO TOLU ADEYEMI",20000,,50000',
+  ].join("\n");
+  const ex3 = await extractStatement({ buffer: Buffer.from(csv3), filename: "pt3.csv", mimeType: "text/csv" });
+  const txs3 = await categorizeTransactions(ex3.transactions, { profile: PROFILE });
+  check("sending money straight back to the same person is not treated as a pass-through", !txs3.some((t) => t.subtype === "pass_through"));
+
+  // 4) More than a few days apart: no match, and the outflow keeps its own honest category.
+  const csv4 = [
+    "Value Date,Narration,Debit,Credit,Balance",
+    '01-Apr-2024,"NIP TRANSFER FROM KEMI ADEBAYO",,60000,160000',
+    '10-Apr-2024,"NIP TRANSFER TO SEUN OGUNDIPE | rent",58000,,102000',
+  ].join("\n");
+  const ex4 = await extractStatement({ buffer: Buffer.from(csv4), filename: "pt4.csv", mimeType: "text/csv" });
+  const txs4 = await categorizeTransactions(ex4.transactions, { profile: PROFILE });
+  check(
+    "a payment more than a few days after the credit is not linked as a pass-through",
+    !txs4.some((t) => t.subtype === "pass_through") && txs4.find((t) => t.rawDescription.includes("SEUN OGUNDIPE"))?.category === "Housing"
+  );
+
+  // 5) It's actually surfaced to the person — a highlight and a plain-language finding.
+  const insights1 = generateMockInsights(PROFILE, a1);
+  const finding = insights1.findings.find((f) => f.id === "pass-through");
+  check("the report explains it in plain language, grounded in the real amount", !!finding && finding.title.includes("₦50,000"));
+  const report1 = buildReport(a1, insights1);
+  check("it shows up as a highlight on the report", report1.highlights.some((h) => h.id === "pass-through"));
+}
+
 async function main() {
   await verifyCsvFixture();
+  await verifyPassThrough();
+  await verifyBankChargeSanity();
   await verifyIncomeFollowsStatement();
   await verifySessionStore();
   await verifyMateriality();
@@ -827,6 +954,7 @@ async function main() {
   await verifyIncomeCheck();
   await verifyBettingProfit();
   await verifyQuestionSelection();
+  await verifyFullNarrationOnQuestions();
   await verifyTransportGroceriesAndFronting();
   await verifyNigerianFixture();
   await verifyPdfFixture();

@@ -72,6 +72,9 @@ const REIMBURSEMENT_WORDS =
 const SHARED_SPEND_WORDS =
   /\b(food|dinner|lunch|breakfast|drinks?|bill|yesterday|last night|uber|bolt|ride|fuel|data|airtime|ticket|shawarma|suya|pizza|chicken|rice|party|outing)\b/i;
 
+// A real single bank-charge line essentially never reaches this — see the rule that uses it.
+const BANK_CHARGE_MAX_AMOUNT = 20_000;
+
 // ---------------------------------------------------------------------------
 // OUTGOING and shared rules, highest priority first
 // ---------------------------------------------------------------------------
@@ -89,11 +92,22 @@ const OUT_AND_SHARED_RULES: Rule[] = [
 
   // Bank charges. Deliberately specific phrases; the generic fee/charge/VAT catch-all lives
   // in the low-confidence fallback (see isLikelyBankFee).
+  //
+  // A real single bank-charge line is always small — SMS alerts are a few naira, NIP/transfer
+  // fees and stamp duty are flat amounts under ₦100, ATM fees are under ₦100, even a heavy
+  // business account's commission-on-turnover rarely reaches four figures. But phrases like
+  // "processing fee", "VAT on", "account maintenance" and "commission" also appear, unrelated
+  // to any bank charge, on genuinely large real payments (a visa or school processing fee, an
+  // invoice's VAT line, a property maintenance fee) — without a ceiling, one such payment gets
+  // confidently mislabelled as a bank charge and can inflate the total past anything plausible.
+  // A guard here mirrors the reasoning isLikelyBankFee already applies to its own fallback.
   out(
     "Banking fees",
     /transfer (fee|charge)|(cash withdrawal|withdrawal|atm) (fee|charge)|nip (fee|charge)|transaction (fee|charge)|bank charge|bank service charge|account maintenance|maintenance (fee|charge)|sms alert|alert (fee|charge)|atm (fee|charge)|card (fee|charge|maintenance)|commission (charge|on turnover)|e-?channel charge|ussd charge|vat on|stamp duty|processing fee|banking charge|\bemtl\b|electronic money transfer levy|\bcot\b|(cbn|government|stamp) levy/i,
     0.92,
-    "bank charge"
+    "bank charge",
+    undefined,
+    (ctx) => ctx.amount <= BANK_CHARGE_MAX_AMOUNT
   ),
 
 

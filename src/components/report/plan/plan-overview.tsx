@@ -9,6 +9,7 @@ import { fillTokens, type PlanView } from "@/lib/plan/allocate";
 import { formatNaira } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { MoneyPlan, PlanBucket } from "@/lib/types";
+import { PlanObligations } from "./plan-obligations";
 
 const BUCKETS: Record<PlanBucket, { label: string; icon: LucideIcon; blurb: (goal: string | null) => string; emphasis: boolean }> = {
   essentials: { label: "Essentials", icon: House, blurb: () => "What you genuinely need to cover", emphasis: false },
@@ -68,6 +69,16 @@ function AllocationRow({ bucket, amount, percent, goal, percentFirst, overspent 
   );
 }
 
+/** Why goals get less than they asked for: what they chose, and what fits after their real spending. */
+function wantedLine(plan: MoneyPlan, wanted: number, fits: number): string {
+  const { goalPercent, reserved } = plan.baseline;
+  const reasons = [
+    ...(goalPercent !== null && goalPercent !== undefined ? [`the ${goalPercent}% you'd like to save`] : []),
+    ...(reserved ? ["saving up for what's coming"] : []),
+  ].join(" plus ");
+  return `${reasons ? `${reasons.charAt(0).toUpperCase()}${reasons.slice(1)} comes to` : "Your goals come to"} about ${formatNaira(wanted)} a month. After what you really spend, ${formatNaira(fits)} fits right now. The changes below are how the rest could.`;
+}
+
 export function PlanOverview({
   plan,
   view,
@@ -119,6 +130,14 @@ export function PlanOverview({
             <AllocationRow key={a.bucket} {...a} goal={plan.goalLabel} percentFirst={percentFirst} overspent={overspent} />
           ))}
         </div>
+
+        <PlanObligations plan={plan} />
+
+        {view.goalsWanted !== null && view.gap === 0 && (
+          <Callout leadIn="Not all of it fits yet.">
+            {wantedLine(plan, view.goalsWanted, view.goals)}
+          </Callout>
+        )}
 
         {irregular && view.goals > 0 && (
           <Callout leadIn="Think in percentages.">

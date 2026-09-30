@@ -1,6 +1,6 @@
 import type { Category, FinancialAnalysis, IncomeCheck, IncomeQuestion, NormalizedTransaction, UserProfile } from "@/lib/types";
 import { computeFinancialAnalysis } from "@/lib/analysis";
-import { answerFollowerIds, isStrongRecipientKey, isUserAnswered, periodInMonths, recipientKeyFor } from "@/lib/analysis/helpers";
+import { answerFollowerIds, isStrongRecipientKey, isUserAnswered, labelForRecipientKey, periodInMonths, recipientKeyFor } from "@/lib/analysis/helpers";
 import { deriveType } from "@/lib/categorization";
 import { computePlanIncome } from "./income";
 import { isEnoughToPlan } from "./build";
@@ -85,10 +85,11 @@ export function computeIncomeCheck(
     questions.push({
       transactionId: target.id,
       direction: "in",
-      name: target.merchant ?? recipientKeyFor(target).replace(/^(phone|acct|name|desc):/, ""),
+      name: target.merchant ?? labelForRecipientKey(recipientKeyFor(target)),
       date: target.date,
       amount: Math.round(target.amount),
       description: target.description,
+      rawDescription: target.rawDescription,
       followers: covers.length - 1,
       why: `${covers.length > 1 ? `${covers.length} credits, ` : ""}${sharePercent}% of the money that came in`,
       shareOfUnexplained: sharePercent,

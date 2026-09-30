@@ -30,6 +30,7 @@ import {
   median,
   pickQuestions,
   periodInMonths,
+  recipientKeyFor,
   sortByDate,
   stddev,
   topKnownCategory,
@@ -328,6 +329,17 @@ export function computeFinancialAnalysis(
     netBurden: Math.round(Math.max(0, sum(sharedExpenseTx) - offsetting)),
   };
 
+  // ---- money that only passed through (forwarded on behalf of someone else) ----
+  const passThroughOut = outflowTx.filter((t) => t.subtype === "pass_through");
+  const passThrough =
+    passThroughOut.length > 0
+      ? {
+          total: Math.round(sum(passThroughOut)),
+          count: passThroughOut.length,
+          people: new Set(passThroughOut.map((t) => recipientKeyFor(t))).size,
+        }
+      : null;
+
   // ---- day of week (spending only) ----
   const dowMap = new Map<string, { total: number; count: number }>();
   for (const tx of spendLikeTx) {
@@ -501,6 +513,7 @@ export function computeFinancialAnalysis(
     support,
     loans,
     reimbursements,
+    passThrough,
     balance: computeBalanceInsights(transactions),
     timePatterns: computeTimePatterns(transactions),
     ledger: computeLedger(transactions),

@@ -1,7 +1,8 @@
-import type { NormalizedTransaction } from "@/lib/types";
+import type { Category, NormalizedTransaction } from "@/lib/types";
 import { daysBetween } from "@/lib/analysis/helpers";
 import { isTransferRail } from "./channels";
 import { CATEGORY_KIND } from "./categories";
+import { extractRecipientKey } from "./recipientKey";
 
 const AMOUNT_TOLERANCE = 0.5; // naira — statements sometimes differ by a kobo-level rounding
 
@@ -144,6 +145,103 @@ export function linkGroupReimbursements(transactions: NormalizedTransaction[]): 
         relatedTransactionId: expense.id,
       });
     }
+  }
+
+  if (updates.size === 0) return transactions;
+  return transactions.map((t) => {
+    const u = updates.get(t.id);
+    return u ? { ...t, ...u } : t;
+  });
+}
+
+const PASS_THROUGH_WINDOW_DAYS = 3;
+const PASS_THROUGH_MIN_AMOUNT = 3_000;
+// The outflow can be a little less than what arrived (a small cut kept, or a fee taken
+// elsewhere) but never more — you can't forward money you never received.
+const PASS_THROUGH_LOWER_BAND = 0.9;
+const PASS_THROUGH_UPPER_BAND = 1.01;
+
+// Categories with a specific, strong meaning of their own — a generic amount-and-timing
+// match is never enough to override these.
+const PASS_THROUGH_EXCLUDED: readonly Category[] = [
+  "Cash", "Banking fees", "Savings", "Investments", "Loans", "Refunds", "Reimbursements", "Transfers", "Betting", "Income",
+];
+
+const isTransferLike = (t: NormalizedTransaction) => isTransferRail(t.paymentMethod) || t.paymentMethod === null || t.paymentMethod === "mobile";
+const keyOf = (t: NormalizedTransaction) => extractRecipientKey(t.rawDescription, t.merchant);
+const labelOf = (t: NormalizedTransaction) => t.merchant ?? keyOf(t)?.replace(/^(phone|acct|name|desc):/, "") ?? "someone";
+
+/**
+ * Detects money that only passed through: a transfer arrives, and within a few days a
+ * near-identical amount leaves again to a DIFFERENT person. This is the common "so-and-so
+ * sent me money to forward to someone else" pattern — the money was never really the
+ * account holder's, so it should count as neither income nor spending, however the outflow's
+ * own remark happens to read (e.g. "school fees" or "rent" for someone else's obligation,
+ * not theirs). The structural match (amount + short window + a different recipient than the
+ * sender) is decisive enough to override even a confident keyword-based category on the
+ * outflow, the same way a matched reversal overrides one.
+ */
+export function linkPassThroughs(transactions: NormalizedTransaction[]): NormalizedTransaction[] {
+  const claimed = new Set<string>();
+  const updates = new Map<string, Partial<NormalizedTransaction>>();
+
+  const inflowCandidates = transactions
+    .filter((t) => t.direction === "in" && t.category === "Uncertain" && t.amount >= PASS_THROUGH_MIN_AMOUNT && isTransferLike(t))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const outflowPool = transactions.filter(
+    (t) =>
+      t.direction === "out" &&
+      t.amount >= PASS_THROUGH_MIN_AMOUNT * PASS_THROUGH_LOWER_BAND &&
+      !PASS_THROUGH_EXCLUDED.includes(t.category) &&
+      t.subtype !== "own_account" &&
+      isTransferLike(t)
+  );
+
+  for (const inflow of inflowCandidates) {
+    if (claimed.has(inflow.id)) continue;
+    const senderKey = keyOf(inflow);
+
+    const candidates = outflowPool.filter((t) => {
+      if (claimed.has(t.id) || t.id === inflow.id) return false;
+      if (t.date < inflow.date || daysBetween(inflow.date, t.date) > PASS_THROUGH_WINDOW_DAYS) return false;
+      if (t.amount > inflow.amount * PASS_THROUGH_UPPER_BAND || t.amount < inflow.amount * PASS_THROUGH_LOWER_BAND) return false;
+      const recipientKey = keyOf(t);
+      // A different person than who sent it in — a bounce back to the same sender isn't forwarding.
+      return !(senderKey && recipientKey && senderKey === recipientKey);
+    });
+    if (candidates.length === 0) continue;
+
+    candidates.sort((a, b) => {
+      const da = Math.abs(a.amount - inflow.amount);
+      const db = Math.abs(b.amount - inflow.amount);
+      if (da !== db) return da - db;
+      return daysBetween(inflow.date, a.date) - daysBetween(inflow.date, b.date);
+    });
+    const outflow = candidates[0];
+
+    claimed.add(inflow.id);
+    claimed.add(outflow.id);
+
+    const gapDays = daysBetween(inflow.date, outflow.date);
+    const gapNote = gapDays === 0 ? "the same day" : `${Math.round(gapDays)} day${gapDays === 1 ? "" : "s"} later`;
+    const senderLabel = labelOf(inflow);
+    const recipientLabel = labelOf(outflow);
+
+    updates.set(inflow.id, {
+      category: "Transfers",
+      categoryConfidence: 0.75,
+      categoryReason: `a near-identical amount left for ${recipientLabel} ${gapNote} — looks like this passed through your account rather than being yours to spend or count as income`,
+      subtype: "pass_through",
+      relatedTransactionId: outflow.id,
+    });
+    updates.set(outflow.id, {
+      category: "Transfers",
+      categoryConfidence: 0.75,
+      categoryReason: `sends on a ₦${Math.round(inflow.amount).toLocaleString()} transfer that arrived from ${senderLabel} ${gapNote} — looks like you were forwarding this rather than spending your own money`,
+      subtype: "pass_through",
+      relatedTransactionId: inflow.id,
+    });
   }
 
   if (updates.size === 0) return transactions;

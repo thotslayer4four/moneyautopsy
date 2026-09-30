@@ -58,7 +58,9 @@ export const INFLOW_EDITABLE_CATEGORIES: Category[] = [
  * differently by direction: money you fronted for someone, or money someone paid back. */
 export function optionLabel(category: Category, direction: "in" | "out"): string {
   if (category === "Reimbursements") return direction === "out" ? "Paid for someone (getting it back)" : "Someone paying me back";
-  if (category === "Transfers") return "Between my own accounts";
+  if (category === "Transfers") {
+    return direction === "out" ? "Passed on to someone else / between my own accounts" : "Passed through to me, for someone else";
+  }
   if (category === "Loans") return direction === "out" ? "Loan (lent or repaid)" : "Loan (borrowed)";
   return category;
 }

@@ -1,7 +1,8 @@
-import type { Category, FinancialAnalysis, PlanChange, PlanStat, UserProfile } from "@/lib/types";
+import type { Category, FinancialAnalysis, PlanChange, PlanObligation, PlanStat, ReduceArea, UserProfile } from "@/lib/types";
 import { formatNaira } from "@/lib/format";
 import { cap, clamp, floorTo, niceAmount, niceTarget, plural, roundTo, tidyName, WEEKS_PER_MONTH } from "./numbers";
 import { helpingBucket, type MonthlySpending } from "./spending";
+import { formatMonth } from "./obligations";
 
 const n = formatNaira;
 
@@ -26,6 +27,27 @@ const FOOD_MAX_CUT = 0.3;
 const FOOD_SWAPS_PER_WEEK = 2;
 
 const MAX_CHANGES = 6;
+/** How much more an area they said they'd happily spend less on weighs when ranking. */
+const OPEN_TO_IT_WEIGHT = 2;
+
+/** Which onboarding answer ("areas I'm willing to reduce") each change belongs to. Changes
+ * with no area (bank charges) are pure leakage, not lifestyle, so they're never held back. */
+/** Buying the same thing more cheaply (bigger data plans, dropping an unused subscription)
+ * isn't a lifestyle cut, so it's never held back for not being on their list. */
+const NOT_A_LIFESTYLE_CUT = new Set(["subscriptions", "data"]);
+
+const AREA_FOR_CHANGE: Record<string, ReduceArea> = {
+  food: "food",
+  shopping: "shopping",
+  personal: "shopping",
+  transport: "transport",
+  cash: "cash",
+  data: "data_airtime",
+  subscriptions: "subscriptions",
+  betting: "betting",
+  support: "helping_others",
+  lending: "helping_others",
+};
 
 export interface ChangeContext {
   analysis: FinancialAnalysis;
@@ -33,11 +55,10 @@ export interface ChangeContext {
   months: number;
   income: number;
   spending: MonthlySpending;
+  obligations: PlanObligation[];
 }
 
-interface Ranked extends PlanChange {
-  score: number;
-}
+type Ranked = Omit<PlanChange, "openToIt"> & { score: number };
 
 const times = (count: number) => (count === 1 ? "once" : count === 2 ? "twice" : `${count} times`);
 
@@ -294,9 +315,11 @@ export function buildChanges(ctx: ChangeContext): PlanChange[] {
 
   // ---- helping people: give it its own budget, don't cut it ----
   const giveBucket = helpingBucket(ctx.profile);
-  if (analysis.support.sentCount >= 2 && spending.supportSent >= minGiving) {
+  const toldUsSupport = spending.supportSent > spending.supportSeen;
+  if ((analysis.support.sentCount >= 2 || toldUsSupport) && spending.supportSent >= minGiving) {
     const now = Math.round(spending.supportSent);
     const allowance = niceAmount(spending.supportSent);
+    const seen = Math.round(spending.supportSeen);
     found.push({
       id: "support",
       label: "helping people",
@@ -307,7 +330,9 @@ export function buildChanges(ctx: ChangeContext): PlanChange[] {
       monthlyTarget: allowance,
       monthlySaving: 0,
       optional: false,
-      fact: `You sent about ${n(now)} a month to people, across ${plural(analysis.support.sentCount, "transfer")}.`,
+      fact: toldUsSupport
+        ? `You told us you usually set aside about ${n(now)} a month to support people${seen > 0 ? `, and this statement shows about ${n(seen)} of it` : ""}.`
+        : `You sent about ${n(now)} a month to people, across ${plural(analysis.support.sentCount, "transfer")}.`,
       proposal: `Give helping people its own ${n(allowance)} a month. That makes it a decision, not a drain on your own goals.`,
       why: "Supporting people is part of your real financial life. A number of its own lets you do it without guilt.",
       rule: `Give helping people its own ${n(allowance)} a month.`,
@@ -346,15 +371,49 @@ export function buildChanges(ctx: ChangeContext): PlanChange[] {
     });
   }
 
+  // What they said they're willing to spend less on leads. A cut in an area they didn't pick
+  // is still offered, but only as something to opt into — the plan never assumes it. "Not sure"
+  // (or no answer) leaves the ranking to the numbers alone.
+  const areas = ctx.profile.willingToReduce ?? [];
+  const decided = areas.length > 0 && !areas.includes("not_sure");
+  const judged = found.map((c) => {
+    const area = AREA_FOR_CHANGE[c.id];
+    const openToIt = decided && !!area && areas.includes(area);
+    const heldBack = decided && !!area && !openToIt && c.nature === "cut" && !NOT_A_LIFESTYLE_CUT.has(c.id);
+    return {
+      ...c,
+      openToIt,
+      optional: openToIt ? false : c.optional || heldBack,
+      score: openToIt ? c.score * OPEN_TO_IT_WEIGHT : c.score,
+    };
+  });
+
   // Best first. Anything they must opt into (betting) is always offered, never leads.
-  const ranked = found.sort((a, b) => Number(a.optional) - Number(b.optional) || b.score - a.score).slice(0, MAX_CHANGES);
+  const ranked = judged.sort((a, b) => Number(a.optional) - Number(b.optional) || b.score - a.score).slice(0, MAX_CHANGES);
   return ranked.map(({ score: _score, ...change }) => (void _score, { ...change, fact: cap(change.fact), proposal: cap(change.proposal), why: cap(change.why) }));
 }
 
-/** Rules that stand on their own evidence, whichever changes are chosen. */
-export function buildExtraRules(ctx: ChangeContext): { id: string; text: string }[] {
+/** Rules that stand on their own evidence, whichever changes are chosen. Rules whose id starts
+ * with "reserve." are about bills they're committed to, and are shown before habit rules. */
+export function buildExtraRules(ctx: ChangeContext, options: { weeklyLimit: boolean }): { id: string; text: string }[] {
   const { analysis } = ctx;
   const rules: { id: string; text: string }[] = [];
+
+  // The biggest bill that isn't paid monthly gets its own pot, so it never lands as a shock.
+  const spread = ctx.obligations
+    .filter((o) => o.bucket === "essentials" && (o.everyMonths ?? 0) > 1 && o.monthly > 0)
+    .sort((a, b) => b.monthly - a.monthly)[0];
+  if (spread) {
+    const ready = spread.dueMonth && spread.catchUpMonthly === null ? `, so it's ready by ${formatMonth(spread.dueMonth)}` : "";
+    const after = spread.monthsUntilDue === 0 ? "Once this one is paid, move" : "Move";
+    rules.push({ id: `reserve.${spread.id}`, text: `${after} ${n(spread.monthly)} into a separate ${spread.label} pot every month${ready}.` });
+  }
+  const upcoming = ctx.obligations.find((o) => o.id === "upcoming" && o.monthly > 0 && o.dueMonth);
+  if (upcoming && upcoming.monthsUntilDue && upcoming.monthsUntilDue > 0) {
+    rules.push({ id: "reserve.upcoming", text: `Put ${n(upcoming.monthly)} toward ${upcoming.label} each month until ${formatMonth(upcoming.dueMonth!)}.` });
+  }
+
+  if (options.weeklyLimit) rules.push({ id: "weekly", text: "Keep everyday and fun spending to about {weekly} a week." });
 
   const unusual = analysis.unusualTransactions;
   if (unusual.length > 0) {

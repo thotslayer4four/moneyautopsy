@@ -173,10 +173,14 @@ function describeIncomeAnswer(category: Category, before: number | null, after: 
   return "Counted as income.";
 }
 
-/** Narrations carry long reference numbers and pipe separators; keep what a person would recognize. */
+/**
+ * Cosmetic only — turns pipe separators into a readable middot and collapses whitespace.
+ * Never removes any digits or words: the whole point of showing this text is so the person
+ * can match it, in full, against their own bank app or alert to identify the transaction for
+ * certain, including the account number and name exactly as the statement printed them.
+ */
 function cleanNarration(text: string): string {
   return text
-    .replace(/\b\d{12,}\w*/g, "")
     .replace(/\s*\|\s*/g, " · ")
     .replace(/(\s·)+\s*$/g, "")
     .replace(/\s+/g, " ")
@@ -215,7 +219,7 @@ function QuestionList({
             <li key={q.transactionId} className="flex flex-col gap-3 py-4 first:pt-0 last:pb-0">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex min-w-0 flex-1 flex-col gap-1">
-                  <span className="truncate text-sm font-medium">{q.name}</span>
+                  <span className="break-words text-sm font-medium">{q.name}</span>
                   <span className="text-xs tabular-nums text-foreground-muted">
                     {formatNaira(q.amount)} · {formatDate(q.date)}
                   </span>
@@ -234,8 +238,8 @@ function QuestionList({
                   </SelectContent>
                 </Select>
               </div>
-              <p className="border-l-2 border-border pl-3 text-xs leading-5 text-foreground-secondary" title={q.description}>
-                <span className="line-clamp-2">{cleanNarration(q.description)}</span>
+              <p className="whitespace-pre-wrap break-words border-l-2 border-border pl-3 text-xs leading-5 text-foreground-secondary">
+                {cleanNarration(q.rawDescription)}
               </p>
               {q.followers > 0 && (
                 <p className="text-xs text-foreground-muted">
@@ -288,7 +292,7 @@ function IncomeQuestionList({
           return (
             <li key={q.transactionId} className="flex flex-col gap-3 py-4 first:pt-0 last:pb-0">
               <div className="flex min-w-0 flex-col gap-1">
-                <span className="truncate text-sm font-medium">{q.name}</span>
+                <span className="break-words text-sm font-medium">{q.name}</span>
                 <span className="text-xs tabular-nums text-foreground-muted">
                   {q.count > 1 ? `${q.count} credits · ${formatNaira(q.total)} in total` : `${formatNaira(q.total)} · ${formatDate(q.date)}`}
                 </span>
@@ -304,8 +308,8 @@ function IncomeQuestionList({
                   <span className="tabular-nums">{formatNaira(q.monthlyBefore!)}</span>.
                 </p>
               )}
-              <p className="border-l-2 border-border pl-3 text-xs leading-5 text-foreground-secondary" title={q.description}>
-                <span className="line-clamp-2">{cleanNarration(q.description)}</span>
+              <p className="whitespace-pre-wrap break-words border-l-2 border-border pl-3 text-xs leading-5 text-foreground-secondary">
+                {cleanNarration(q.rawDescription)}
               </p>
               <div className="flex flex-wrap items-center gap-3">
                 <Button onClick={() => onLabel(q, "Income")} disabled={saving}>

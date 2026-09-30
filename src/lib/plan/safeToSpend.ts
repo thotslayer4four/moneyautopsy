@@ -1,8 +1,12 @@
-import type { FinancialAnalysis, NormalizedTransaction, PlanBaseline, PlanIncome, SafeToSpend, UserProfile } from "@/lib/types";
+import type { Category, FinancialAnalysis, NormalizedTransaction, PlanBaseline, PlanIncome, PlanObligation, SafeToSpend, UserProfile } from "@/lib/types";
 import { formatDate } from "@/lib/format";
 import { dayOfMonth, daysBetween, median, sortByDate } from "@/lib/analysis/helpers";
 import { bucketFor } from "./spending";
-import { DAYS_PER_MONTH, roundTo } from "./numbers";
+import { DAYS_PER_MONTH, cap, roundTo } from "./numbers";
+import { formatMonth } from "./obligations";
+
+/** The statement category a stated bill shows up under, when it's paid from this account. */
+const OBLIGATION_CATEGORY: Partial<Record<PlanObligation["id"], Category>> = { rent: "Housing", school: "Education" };
 
 /** A balance older than this says nothing reliable about what is safe to spend today. */
 const MAX_STATEMENT_AGE_DAYS = 14;
@@ -44,6 +48,8 @@ export interface SafeToSpendInput {
   baseline: PlanBaseline;
   /** What the plan sets aside for goals each month (from the plan as first shown). */
   goalsMonthly: number;
+  /** Bills they told us about; the essential ones are held back on their own lines. */
+  obligations: PlanObligation[];
   today: string;
 }
 
@@ -56,7 +62,7 @@ export interface SafeToSpendInput {
  * when it is a regular payday — then the period simply ends at that payday.
  */
 export function computeSafeToSpend(input: SafeToSpendInput): { value: SafeToSpend | null; note: string | null } {
-  const { transactions, analysis, profile, income, baseline, goalsMonthly, today } = input;
+  const { transactions, analysis, profile, income, baseline, goalsMonthly, obligations, today } = input;
   const sorted = sortByDate(transactions);
   const last = [...sorted].reverse().find((t) => t.balance !== null);
   if (!last || !analysis.periodEnd || daysBetween(last.date, analysis.periodEnd) > BALANCE_RECENCY_DAYS) {
@@ -70,7 +76,9 @@ export function computeSafeToSpend(input: SafeToSpendInput): { value: SafeToSpen
 
   // ---- the period we are spending through ----
   const incomeTx = transactions.filter((t) => t.direction === "in" && t.category === "Income");
-  const paydayDay = regularPaydayDay(incomeTx, income.regularity === "steady");
+  // Only look for one monthly payday when they didn't tell us money arrives some other way.
+  const monthlyPay = !profile.incomeTiming || profile.incomeTiming === "monthly";
+  const paydayDay = regularPaydayDay(incomeTx, monthlyPay && income.regularity === "steady");
   const asOfDate = new Date(asOf + "T00:00:00Z");
   const year = asOfDate.getUTCFullYear();
   const month0 = asOfDate.getUTCMonth();
@@ -94,10 +102,40 @@ export function computeSafeToSpend(input: SafeToSpendInput): { value: SafeToSpen
   // A typical month's essentials, less what has already gone out this cycle — so rent paid on
   // the 2nd isn't counted again on the 12th, and rent still to come is counted in full.
   const cycleDays = daysBetween(cycleStart, cycleEnd) + 1;
-  const essentialsPaid = transactions
-    .filter((t) => t.direction === "out" && t.date >= cycleStart && t.date <= asOf && bucketFor(t.category, profile) === "essentials")
-    .reduce((s, t) => s + t.amount, 0);
-  const essentialsRemaining = Math.max(0, (baseline.essentials * cycleDays) / DAYS_PER_MONTH - essentialsPaid);
+  const inCycle = (t: NormalizedTransaction) => t.direction === "out" && t.date >= cycleStart && t.date <= asOf;
+  const paidInCycle = (match: (t: NormalizedTransaction) => boolean) =>
+    transactions.filter((t) => inCycle(t) && match(t)).reduce((s, t) => s + t.amount, 0);
+
+  // Bills they told us about are held back on lines of their own below, so they come out of
+  // the day-to-day essentials figure here — and so do payments toward them already made.
+  const bills = obligations.filter((o) => o.bucket === "essentials" && o.monthly > 0);
+  const billCategories = new Set(bills.map((o) => OBLIGATION_CATEGORY[o.id]).filter((c): c is Category => !!c));
+  const dayToDayEssentials = Math.max(0, baseline.essentials - bills.reduce((s, o) => s + o.monthly, 0));
+  const essentialsPaid = paidInCycle((t) => bucketFor(t.category, profile) === "essentials" && !billCategories.has(t.category));
+  const essentialsRemaining = Math.max(0, (dayToDayEssentials * cycleDays) / DAYS_PER_MONTH - essentialsPaid);
+
+  // A bill due before this period ends is held back in full; one due later only needs this
+  // month's share put aside. Monthly bills and debt: whatever of this month's isn't paid yet.
+  const periodMonth = (paydayDay !== null ? addDays(cycleEnd, 1) : cycleEnd).slice(0, 7);
+  const billLines: { label: string; amount: number }[] = [];
+  for (const o of bills) {
+    const category = OBLIGATION_CATEGORY[o.id];
+    const paid =
+      o.id === "debt"
+        ? paidInCycle((t) => t.category === "Loans" && t.subtype === "repayment")
+        : category
+          ? paidInCycle((t) => t.category === category)
+          : 0;
+    if (o.everyMonths === 1) {
+      const left = Math.max(0, o.monthly - paid);
+      if (left > 0) billLines.push({ label: `${cap(o.label)} still to pay this month`, amount: left });
+    } else if (o.dueMonth && o.dueMonth <= periodMonth) {
+      const left = Math.max(0, o.amount - paid);
+      if (left > 0) billLines.push({ label: `${cap(o.label)} due ${formatMonth(o.dueMonth)}`, amount: left });
+    } else {
+      billLines.push({ label: `Set aside for ${o.label}`, amount: o.monthly });
+    }
+  }
 
   // Subscription-style payments falling due before the period ends. Repeating everyday spend
   // (a weekly cash-out, lunch) isn't a commitment, and essentials are in the line above.
@@ -118,6 +156,7 @@ export function computeSafeToSpend(input: SafeToSpendInput): { value: SafeToSpen
   const working = [
     { label: "In your account", amount: roundTo(balance, 500) },
     { label: "Essentials still to come", amount: -roundTo(essentialsRemaining, 500) },
+    ...billLines.map((b) => ({ label: b.label, amount: -roundTo(b.amount, 500) })),
     ...(upcoming > 0 ? [{ label: "Recurring payments due", amount: -roundTo(upcoming, 500) }] : []),
     ...(goalStillToMove > 0 ? [{ label: "Still to move toward your goal", amount: -roundTo(goalStillToMove, 500) }] : []),
     ...(baseline.buffer > 0 ? [{ label: "Buffer you leave alone", amount: -roundTo(baseline.buffer, 500) }] : []),

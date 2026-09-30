@@ -115,15 +115,32 @@ const TRANSFER_NAME_PATTERNS = [
   /(?:nip|neft)\s*[:\-]?\s*([A-Za-z0-9 .'\-]{2,40})/i,
 ];
 
+/** A phone or account number, not a name — the character class above allows digits so a
+ * narration like "TRANSFER TO 08011112222" would otherwise be guessed as a merchant literally
+ * named "08011112222". That number belongs in the recipient key, never displayed as a name. */
+function isPureNumber(text: string): boolean {
+  return /^\d+$/.test(text.replace(/\s+/g, ""));
+}
+
 /** Best-effort guess at the counterparty name embedded in a raw narration. */
 export function guessMerchant(rawDescription: string): string | null {
   for (const pattern of TRANSFER_NAME_PATTERNS) {
     const m = rawDescription.match(pattern);
-    if (m) return cleanDescription(m[1]).slice(0, 60);
+    if (!m) continue;
+    // The first pattern to find a rail cue ("transfer to", "nip:"...) settles it — a purely
+    // numeric capture means there's no name to guess, not a reason to try the next, looser
+    // pattern, which would otherwise swallow the rail wording itself as if it were the name
+    // (e.g. falling through from "transfer to" to "nip" on "NIP TRANSFER TO 08011112222"
+    // would capture "TRANSFER TO 08011112222" whole).
+    const candidate = cleanDescription(m[1]).slice(0, 60);
+    return isPureNumber(candidate) ? null : candidate;
   }
   // POS / card purchases often read "POS PURCHASE AT <merchant> ..."
   const posMatch = rawDescription.match(/(?:POS|CARD)\s*(?:PURCHASE)?\s*(?:AT|-)?\s*([A-Za-z0-9 .'\-]{2,40})/i);
-  if (posMatch) return cleanDescription(posMatch[1]).slice(0, 60);
+  if (posMatch) {
+    const candidate = cleanDescription(posMatch[1]).slice(0, 60);
+    if (!isPureNumber(candidate)) return candidate;
+  }
   return null;
 }
 
