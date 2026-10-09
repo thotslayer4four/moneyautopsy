@@ -164,7 +164,8 @@ export type ReduceArea = Value<typeof REDUCE_AREA_OPTIONS>;
 export interface UserProfile {
   gender: Gender;
   ageRange: AgeRange;
-  situation: LifeSituation;
+  /** Everything that applies: a student can also be self-employed. */
+  situation: LifeSituation[];
   livingWith: LivingSituation;
   incomeSources: IncomeSource[];
   primaryIncomeSource: IncomeSource;

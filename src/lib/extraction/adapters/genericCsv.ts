@@ -25,10 +25,12 @@ export function makeCsvAdapter(config: {
     },
     parseCsvRows(rows: RawRow[]) {
       const headers = rows.length > 0 ? Object.keys(rows[0]) : [];
-      const map = detectColumns(headers);
+      const { map, sniffed } = detectColumns(headers, rows);
       const warnings: string[] = [];
       if (!hasUsableColumns(map)) {
         warnings.push(`${config.name} adapter could not confidently identify date/amount columns.`);
+      } else if (sniffed.length > 0) {
+        warnings.push(`${config.name} adapter guessed the ${sniffed.join("/")} column(s) from their contents, not their header — worth a glance.`);
       }
       const transactions = [];
       let skipped = 0;

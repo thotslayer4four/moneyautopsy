@@ -333,7 +333,9 @@ function MultiQuestion({
   onPatch: Patch;
   onContinue: () => void;
 }) {
-  const selected = (profile[step.key] as string[] | undefined) ?? [];
+  // A single saved answer (a question that used to be single-choice) counts as one selection.
+  const saved = profile[step.key] as string | string[] | undefined;
+  const selected = Array.isArray(saved) ? saved : saved ? [saved] : [];
   const exclusive = step.exclusive ?? [];
 
   function toggle(value: string) {

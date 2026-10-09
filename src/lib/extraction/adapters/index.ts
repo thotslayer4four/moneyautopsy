@@ -45,10 +45,12 @@ export const genericFallbackAdapter: BankStatementAdapter = {
   },
   parseCsvRows(rows: RawRow[]) {
     const headers = rows.length > 0 ? Object.keys(rows[0]) : [];
-    const map = detectColumns(headers);
+    const { map, sniffed } = detectColumns(headers, rows);
     const warnings: string[] = [];
     if (!hasUsableColumns(map)) {
       warnings.push("Could not confidently identify the date/amount columns in this file.");
+    } else if (sniffed.length > 0) {
+      warnings.push(`Guessed the ${sniffed.join("/")} column(s) from their contents, not their header — worth a glance.`);
     }
     const transactions = [];
     let skipped = 0;

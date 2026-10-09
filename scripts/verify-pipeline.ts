@@ -8,7 +8,7 @@
 import fs from "fs";
 import path from "path";
 import { extractStatement } from "../src/lib/extraction";
-import { parseStatementLines, extractPdfLines } from "../src/lib/extraction/pdf";
+import { parseStatementLines, extractPdfLines, isolatePrimaryAccountSection } from "../src/lib/extraction/pdf";
 import { generateReportPdf } from "../src/lib/report/pdf";
 import http from "http";
 import { createSession, getSession, unlockSession, updateSessionReport } from "../src/lib/session";
@@ -28,7 +28,7 @@ const FIXTURES_DIR = path.join(__dirname, "..", "test-fixtures");
 const PROFILE: UserProfile = {
   gender: "female",
   ageRange: "26_30",
-  situation: "employed",
+  situation: ["employed"],
   livingWith: "alone",
   incomeSources: ["salary", "freelance"],
   primaryIncomeSource: "salary",
@@ -132,6 +132,44 @@ async function verifyEncryptedPdfFixture() {
     "the error names the password, not a generic 'scanned image' guess",
     extraction.issues.some((i) => /password-protected/i.test(i.message))
   );
+}
+
+function anchorLine(date: string, desc: string, amount: string, balance: string): string {
+  return `${date} 09:00:00 ${date} ${desc} ${amount} -- ${balance} Mobile 1`;
+}
+
+async function verifyAccountSectionSplitting() {
+  console.log("\n== multi-page PDFs: a reprinted page header isn't mistaken for a second account ==");
+
+  // A header reprinted at the top of page 2, with only 2 real transactions since the first
+  // header — not nearly enough to be a genuine second account's own table.
+  const repeatedPageHeader = [
+    "Debit Count Credit Count Total Debit Total Credit Opening Balance Closing Balance",
+    anchorLine("01 Jun 2026", "Transfer to A", "1,000.00", "99,000.00"),
+    anchorLine("02 Jun 2026", "Transfer to B", "1,000.00", "98,000.00"),
+    "Debit Count Credit Count Total Debit Total Credit Opening Balance Closing Balance", // page 2's reprint
+    anchorLine("03 Jun 2026", "Transfer to C", "1,000.00", "97,000.00"),
+    anchorLine("04 Jun 2026", "Transfer to D", "1,000.00", "96,000.00"),
+    anchorLine("05 Jun 2026", "Transfer to E", "1,000.00", "95,000.00"),
+  ];
+  const resultA = isolatePrimaryAccountSection(repeatedPageHeader);
+  check("a header reprinted after only a couple of transactions is not treated as a new account", !resultA.truncated && resultA.lines.length === repeatedPageHeader.length);
+  const parsedA = parseStatementLines(resultA.lines);
+  check("every transaction across both pages is kept", parsedA.transactions.length === 5);
+
+  // A genuine second account (OPay's "Wallet" followed by a "Savings"/OWealth pocket): a full
+  // table of its own transactions sits between the two headers.
+  const genuineSecondAccount = [
+    "Debit Count Credit Count Total Debit Total Credit Opening Balance Closing Balance",
+    ...Array.from({ length: 6 }, (_, i) => anchorLine(`0${i + 1} Jun 2026`, `Transfer to ${i}`, "1,000.00", `${99 - i},000.00`)),
+    "Debit Count Credit Count Total Debit Total Credit Opening Balance Closing Balance",
+    anchorLine("10 Jun 2026", "Savings pocket move", "500.00", "10,000.00"),
+    anchorLine("11 Jun 2026", "Savings pocket move", "500.00", "9,500.00"),
+  ];
+  const resultB = isolatePrimaryAccountSection(genuineSecondAccount);
+  check("a header after a full table of its own transactions IS treated as a second account", resultB.truncated);
+  const parsedB = parseStatementLines(resultB.lines);
+  check("only the first account's transactions are kept", parsedB.transactions.length === 6);
 }
 
 async function verifyCategorizationImprovements() {
@@ -963,8 +1001,56 @@ async function verifyPassThrough() {
   check("it shows up as a highlight on the report", report1.highlights.some((h) => h.id === "pass-through"));
 }
 
+async function verifyColumnSniffing() {
+  console.log("\n== extraction: guessing columns from content when headers are unfamiliar ==");
+
+  // A single signed-amount column, headers nothing in ALIASES would match, from a bank
+  // with no registered signature — this must fall through to the generic adapter.
+  const singleAmountCsv = [
+    "Txn Dt,Particulars2,Amt,Bal",
+    "01-Mar-2024,SALARY PAYMENT ACME LTD,200000,300000",
+    "02-Mar-2024,NIP TRANSFER TO 08031234567 food,-9000,291000",
+    "05-Mar-2024,NETFLIX.COM SUBSCRIPTION,-4500,286500",
+    "08-Mar-2024,UBER TRIP,-3200,283300",
+  ].join("\n");
+  const ex1 = await extractStatement({ buffer: Buffer.from(singleAmountCsv), filename: "unknown-bank.csv", mimeType: "text/csv" });
+  check("an unfamiliar single signed-amount column is still extracted (not flagged for review)", !ex1.needsReview && ex1.transactions.length === 4);
+  check("amounts and directions came out right despite the odd headers", ex1.transactions.find((t) => /SALARY/.test(t.rawDescription))?.direction === "in" && ex1.transactions.find((t) => /UBER/.test(t.rawDescription))?.amount === 3200);
+  check("the guess is disclosed as a warning, not presented as a confident header match", ex1.issues.some((i) => /guessed/i.test(i.message)));
+
+  // A debit/credit split under headers like "Dr" and "Cr" (not in ALIASES).
+  const splitCsv = [
+    "Txn Dt,Particulars2,Dr,Cr,Bal",
+    "01-Mar-2024,SALARY PAYMENT ACME LTD,,200000,300000",
+    "02-Mar-2024,NIP TRANSFER TO 08031234567 food,9000,,291000",
+    "05-Mar-2024,NETFLIX.COM SUBSCRIPTION,4500,,286500",
+    "08-Mar-2024,UBER TRIP,3200,,283300",
+    "10-Mar-2024,SALARY PAYMENT ACME LTD,,200000,483300",
+  ].join("\n");
+  const ex2 = await extractStatement({ buffer: Buffer.from(splitCsv), filename: "unknown-bank-2.csv", mimeType: "text/csv" });
+  check("an unfamiliar debit/credit split is recognised as two sparse numeric columns, not one", !ex2.needsReview && ex2.transactions.length === 5);
+  check("direction follows which of the two sparse columns was filled", ex2.transactions.filter((t) => t.direction === "in").length === 2 && ex2.transactions.filter((t) => t.direction === "out").length === 3);
+
+  // A header match always wins over a content guess, even when the header-named column
+  // would also have scored well on content.
+  const headerWinsCsv = [
+    "Date,Narration,Amount,Reference",
+    "01-Mar-2024,SALARY PAYMENT ACME LTD,200000,1029384756",
+    "02-Mar-2024,NIP TRANSFER TO 08031234567 food,-9000,1029384757",
+    "05-Mar-2024,NETFLIX.COM SUBSCRIPTION,-4500,1029384758",
+  ].join("\n");
+  const ex3 = await extractStatement({ buffer: Buffer.from(headerWinsCsv), filename: "normal-bank.csv", mimeType: "text/csv" });
+  check("a clean header match produces no sniffing warning", !ex3.needsReview && !ex3.issues.some((i) => /guessed/i.test(i.message)));
+
+  // Genuinely unusable input (no numeric column at all) is still honestly flagged, not forced.
+  const unusableCsv = ["Name,Note", "John,hello", "Jane,hi there friend"].join("\n");
+  const ex4 = await extractStatement({ buffer: Buffer.from(unusableCsv), filename: "not-a-statement.csv", mimeType: "text/csv" });
+  check("content sniffing doesn't fabricate a statement out of non-statement data", ex4.needsReview);
+}
+
 async function main() {
   await verifyCsvFixture();
+  await verifyColumnSniffing();
   await verifyPassThrough();
   await verifyBankChargeSanity();
   await verifyIncomeFollowsStatement();
@@ -981,6 +1067,7 @@ async function main() {
   await verifyNigerianFixture();
   await verifyPdfFixture();
   await verifyEncryptedPdfFixture();
+  await verifyAccountSectionSplitting();
   await verifyCategorizationImprovements();
 
   console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) failed.`}`);

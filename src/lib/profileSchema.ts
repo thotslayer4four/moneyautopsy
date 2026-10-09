@@ -32,7 +32,11 @@ export const userProfileSchema = z
   .object({
     gender: z.enum(valuesOf(GENDER_OPTIONS)),
     ageRange: z.enum(valuesOf(AGE_OPTIONS)),
-    situation: z.enum(valuesOf(SITUATION_OPTIONS)),
+    // A single answer is what onboarding saved before this became pick-all-that-apply.
+    situation: z.preprocess(
+      (v) => (typeof v === "string" ? [v] : v),
+      z.array(z.enum(valuesOf(SITUATION_OPTIONS))).min(1).max(SITUATION_OPTIONS.length)
+    ),
     livingWith: z.enum(valuesOf(LIVING_OPTIONS)),
     incomeSources: z.array(incomeSource).min(1).max(INCOME_SOURCE_OPTIONS.length),
     primaryIncomeSource: incomeSource,

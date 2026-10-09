@@ -121,7 +121,13 @@ export const steps: Step[] = [
     options: GENDER_OPTIONS,
   },
   { key: "ageRange", type: "choice", question: "What age range are you in?", options: AGE_OPTIONS },
-  { key: "situation", type: "choice", question: "What's your current situation?", options: SITUATION_OPTIONS },
+  {
+    key: "situation",
+    type: "multi",
+    question: "What's your current situation?",
+    helper: "Pick everything that applies.",
+    options: SITUATION_OPTIONS,
+  },
   { key: "livingWith", type: "choice", question: "Where do you live right now?", options: LIVING_OPTIONS },
   {
     key: "incomeSources",
@@ -317,7 +323,8 @@ export function isStepAnswered(step: Step, profile: Draft): boolean {
   // Details screens can always be skipped, so they never hold up finishing.
   if (step.type === "details") return true;
   const value = profile[step.key];
-  if (step.type === "multi") return Array.isArray(value) && value.length > 0;
+  // A lone string is a single-choice answer saved before the question became multi-select.
+  if (step.type === "multi") return Array.isArray(value) ? value.length > 0 : !!value;
   if (!value) return false;
   if (step.followUp?.showWhen.includes(value as string)) return !!profile[step.followUp.key];
   return true;

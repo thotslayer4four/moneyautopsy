@@ -29,7 +29,8 @@ export function describeProfileForLlm(profile: UserProfile) {
   return {
     gender: profile.gender,
     age: labelFor(AGE_OPTIONS, profile.ageRange),
-    situation: labelFor(SITUATION_OPTIONS, profile.situation),
+    // .flat(): reports saved before this was multi-select hold a single answer.
+    situation: labels(SITUATION_OPTIONS, [profile.situation].flat()),
     livingWith: labelFor(LIVING_OPTIONS, profile.livingWith),
     incomeSources: labels(INCOME_SOURCE_OPTIONS, profile.incomeSources),
     primaryIncomeSource: labelFor(INCOME_SOURCE_OPTIONS, profile.primaryIncomeSource),

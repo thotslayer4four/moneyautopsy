@@ -291,14 +291,28 @@ export function parseStatementLines(lines: string[]): { transactions: Normalized
 // first account already recorded (money moving into/out of the pocket), so including both
 // double-counts every one of those movements. We keep only the first account section.
 const ACCOUNT_SECTION_HEADER = /debit count.*total debit.*opening balance/i;
+// A genuine second account section has a full table of its own transactions before it. A
+// repeat of the SAME account's header — reprinted at the top of the next page, which some
+// multi-page statements do — sits right on top of the first with little or nothing between.
+// Below this count, treat it as a reprinted header, not a new section, and look further on
+// rather than truncating almost the entire statement down to its first page.
+const MIN_ANCHORS_PER_SECTION = 5;
 
-function isolatePrimaryAccountSection(lines: string[]): { lines: string[]; truncated: boolean } {
+export function isolatePrimaryAccountSection(lines: string[]): { lines: string[]; truncated: boolean } {
   const sectionStarts = lines.reduce<number[]>((acc, line, i) => {
     if (ACCOUNT_SECTION_HEADER.test(line)) acc.push(i);
     return acc;
   }, []);
   if (sectionStarts.length < 2) return { lines, truncated: false };
-  return { lines: lines.slice(0, sectionStarts[1]), truncated: true };
+
+  for (let i = 1; i < sectionStarts.length; i++) {
+    const between = lines.slice(sectionStarts[i - 1], sectionStarts[i]);
+    const anchorCount = between.filter((l) => DATE_START.test(l)).length;
+    if (anchorCount >= MIN_ANCHORS_PER_SECTION) {
+      return { lines: lines.slice(0, sectionStarts[i]), truncated: true };
+    }
+  }
+  return { lines, truncated: false };
 }
 
 // Looks for a header line naming the "Account Name" column, then reads the name off the
